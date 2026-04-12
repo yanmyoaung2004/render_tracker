@@ -155,8 +155,8 @@ Custom Chrome DevTools panel:
 ## 🛠️ Installation
 
 ```bash
-git clone https://github.com/your-username/react-render-insight-devtools
-cd react-render-insight-devtools
+git clone https://github.com/yanmyoaung2004/render_tracker
+cd render_tracker
 ```
 
 ### Load Extension
