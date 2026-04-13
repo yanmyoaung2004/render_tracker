@@ -4,7 +4,7 @@
   let currentCommitUpdates = [];
   let lastPrintTime = 0;
   const renderTimeline = [];
-  const commitMap = new WeakMap(); // Track which fibers participated in this commit
+  const commitMap = new WeakMap();
   let commitCounter = 0;
 
   // =============================
@@ -12,7 +12,6 @@
   // =============================
   function getComponentName(fiber) {
     const { type, elementType } = fiber;
-
     if (typeof type === "string") return null;
 
     let name =
@@ -31,21 +30,75 @@
   // =============================
   // USER COMPONENT FILTER
   // =============================
+  // function isUserComponent(fiber) {
+  //   console.log(fiber);
+  //   if (!fiber || !fiber.type) return false;
+  //   if (typeof fiber.type === "string") return false;
+  //   return true;
+  //   //   const source = fiber._debugSource;
+  //   //   const fileName = source?.fileName || "";
+  //   //   return fileName.includes("src/") || fileName.includes("src\\");
+  // }
   function isUserComponent(fiber) {
-    if (!fiber) return false;
-    const source = fiber._debugSource;
-    return source?.fileName?.includes("/src/");
+    if (!fiber || !fiber.type) return false;
+
+    const { type, tag } = fiber;
+
+    // 1. Exclude DOM/native elements (<div>, <span>, etc.)
+    if (typeof type === "string") return false;
+
+    // 2. Exclude React internal types (fragments, suspense, etc.)
+    const REACT_INTERNAL_TAGS = new Set([
+      3, // HostRoot
+      7, // Fragment
+      9, // ContextConsumer
+      10, // ContextProvider
+      11, // ForwardRef (optional: include if you want)
+      13, // Suspense
+      19, // SuspenseList
+      22, // Offscreen
+    ]);
+
+    if (REACT_INTERNAL_TAGS.has(tag)) return false;
+
+    // 3. Try to get component name
+    const name =
+      type?.displayName ||
+      type?.name ||
+      fiber.elementType?.displayName ||
+      fiber.elementType?.name;
+
+    if (!name) return false;
+
+    // 4. Filter obvious library / internal noise
+    const isLikelyLibrary =
+      name.startsWith("Styled") || // styled-components
+      name.startsWith("Mui") || // MUI
+      name.startsWith("ForwardRef") ||
+      name.startsWith("Memo") ||
+      name.includes("Provider") ||
+      name.includes("Consumer");
+
+    if (isLikelyLibrary) return false;
+
+    // 5. Heuristic: user components are capitalized
+
+    const isCapitalized = name[0] === name[0].toUpperCase();
+
+    return isCapitalized;
   }
 
   function isTopLevelUserComponent(fiber) {
-    if (!isUserComponent(fiber)) return false;
-
-    const owner = fiber._debugOwner;
-    return !isUserComponent(owner);
+    if (fiber.type && typeof fiber.type !== "string") {
+      if (!isUserComponent(fiber)) return false;
+      const owner = fiber._debugOwner;
+      return isUserComponent(owner);
+    }
+    return false;
   }
 
   // =============================
-  // DETAILED PROP DIFF
+  // PROP DIFF
   // =============================
   function getDetailedPropDiff(prev = {}, next = {}) {
     const changes = [];
@@ -95,6 +148,19 @@
   }
 
   // =============================
+  // CAUSE CLASSIFICATION (ELITE)
+  // =============================
+  function classifyCause(changes) {
+    if (!changes || changes.length === 0) return "parent";
+
+    // Priority: state > context > props > parent
+    if (changes.some((c) => c.type === "state")) return "state";
+    if (changes.some((c) => c.type === "context")) return "context";
+    if (changes.some((c) => c.type === "props")) return "props";
+    return "parent";
+  }
+
+  // =============================
   // RENDER CAUSE DETECTION
   // =============================
   function detectRenderCause(prevFiber, fiber) {
@@ -126,11 +192,11 @@
       changes.push({ type: "parent" });
     }
 
-    return { changes, propDiff };
+    return { changes, propDiff, causeType: classifyCause(changes) };
   }
 
   // =============================
-  // TRUE CAUSAL CHAIN (BREAKTHROUGH)
+  // TRUE ROOT CAUSE CHAIN (ELITE)
   // =============================
   function buildCauseChain(fiber) {
     const chain = [];
@@ -138,13 +204,7 @@
 
     while (current) {
       const name = getComponentName(current);
-      if (!name) {
-        current = current.return;
-        continue;
-      }
-
-      // Only include user components
-      if (!isUserComponent(current)) {
+      if (!name || !isUserComponent(current)) {
         current = current.return;
         continue;
       }
@@ -153,6 +213,7 @@
       if (data?.rendered) {
         chain.push({
           name,
+          causeType: data.causeType || "parent",
           cause: data.cause || { changes: [{ type: "unknown" }] },
           fiberKey: current.key,
         });
@@ -161,81 +222,88 @@
       current = current.return;
     }
 
-    return chain.reverse(); // Root first, leaf last
-  }
+    chain.reverse(); // Root first
 
-  // =============================
-  // CONFIDENCE SCORING
-  // =============================
-  function calculateConfidence(fiber, patterns, causeChain) {
-    let confidence = 0;
-    const reasons = [];
-
-    // High confidence for wasted renders
-    const hasWastedRender = patterns.some((p) => p.type === "wasted-render");
-    if (hasWastedRender) {
-      confidence += 85;
-      reasons.push("Props unchanged, parent re-render only");
-    }
-
-    // High confidence for unstable functions
-    const hasUnstableFunc = patterns.some(
-      (p) => p.type === "unstable-function-prop",
-    );
-    if (hasUnstableFunc) {
-      confidence += 75;
-      reasons.push("Function reference changes detected");
-    }
-
-    // Medium confidence for object instability
-    const hasObjectInstability = patterns.some(
-      (p) => p.type === "object-prop-instability",
-    );
-    if (hasObjectInstability) {
-      confidence += 60;
-      reasons.push("Object props recreated each render");
-    }
-
-    // Check render frequency
-    const stats = globalStats.get(getComponentName(fiber));
-    if (stats && stats.renders > 10) {
-      confidence += 20;
-      reasons.push("High render frequency detected");
-    }
-
-    // Check chain depth (deep propagation = higher confidence for memo)
-    if (causeChain.length > 3) {
-      confidence += 15;
-      reasons.push("Deep propagation chain");
-    }
+    // 🔥 FIND TRUE ROOT CAUSE
+    let rootIndex = chain.findIndex((node) => node.causeType !== "parent");
+    if (rootIndex === -1) rootIndex = chain.length - 1;
 
     return {
-      score: Math.min(confidence, 100),
-      reasons,
+      chain,
+      rootIndex,
+      rootCause: chain[rootIndex],
     };
   }
 
   // =============================
-  // PATTERN DETECTION (ENHANCED)
+  // ADVANCED PATTERN DETECTION
   // =============================
-  function detectPatterns(fiber, propDiff, causeChain) {
+  function detectAdvancedPatterns(fiber, propDiff, causeChainData) {
     const patterns = [];
+    const { chain, rootIndex, rootCause } = causeChainData;
 
-    // 1. Unstable function props
+    // 1. Wasted Chain Detection
+    const allParent = chain.every((node) => node.causeType === "parent");
+    if (allParent && chain.length > 1) {
+      patterns.push({
+        type: "wasted-chain",
+        severity: "critical",
+        chainLength: chain.length,
+        suggestion: `Entire ${chain.length}-level chain is wasted re-renders. Memoize ${chain[0]?.name}`,
+        confidence: 95,
+        impact: "Would eliminate 100% of this cascade",
+      });
+    }
+
+    // 2. Context Explosion Detection
+    if (rootCause?.causeType === "context") {
+      const affectedCount = chain.length - 1; // Excluding root
+      if (affectedCount > 3) {
+        patterns.push({
+          type: "context-explosion",
+          severity: "high",
+          affectedComponents: affectedCount,
+          rootComponent: rootCause.name,
+          suggestion: `Context in ${rootCause.name} caused ${affectedCount} downstream re-renders. Consider splitting context or using selectors`,
+          confidence: 85,
+          impact: `Could reduce ${affectedCount} unnecessary re-renders`,
+        });
+      }
+    }
+
+    // 3. Prop Cascade Detection (prop drilling)
+    if (rootCause?.causeType === "props") {
+      const propKeys =
+        rootCause.cause?.changes?.find((c) => c.type === "props")?.keys || [];
+      const drillingDepth = chain.length - rootIndex;
+
+      if (drillingDepth > 3 && propKeys.length > 0) {
+        patterns.push({
+          type: "prop-cascade",
+          severity: "high",
+          depth: drillingDepth,
+          props: propKeys,
+          suggestion: `Prop drilling detected: ${propKeys.join(", ")} through ${drillingDepth} levels. Consider context or composition`,
+          confidence: 80,
+          impact: "Reduces coupling and render cascades",
+        });
+      }
+    }
+
+    // 4. Unstable function props
     const unstableFunctions = propDiff.filter((d) => d.isFunctionRefChange);
     if (unstableFunctions.length > 0) {
-      const confidence = calculateConfidence(fiber, [], causeChain);
       patterns.push({
         type: "unstable-function-prop",
         severity: "high",
         props: unstableFunctions.map((f) => f.key),
         suggestion: `Wrap ${unstableFunctions.map((f) => f.key).join(", ")} in useCallback()`,
-        confidence: Math.min(confidence.score + 10, 95),
-        impact: `Likely reduces 60-80% of re-renders`,
+        confidence: 90,
+        impact: "Likely reduces 60-80% of re-renders",
       });
     }
 
-    // 2. Object prop instability
+    // 5. Object prop instability
     const objectChanges = propDiff.filter(
       (d) => d.type === "object" && !d.isNew && !d.isRemoved,
     );
@@ -246,40 +314,19 @@
         props: objectChanges.map((o) => o.key),
         suggestion: `Stabilize objects with useMemo()`,
         confidence: 70,
-        impact: `May reduce 40-60% of re-renders`,
+        impact: "May reduce 40-60% of re-renders",
       });
     }
 
-    // 3. Wasted render with high confidence
-    const name = getComponentName(fiber);
-    if (name && fiber.alternate) {
-      const { changes } = detectRenderCause(fiber.alternate, fiber);
-      if (changes.length === 1 && changes[0].type === "parent") {
-        const confidence = calculateConfidence(
-          fiber,
-          [{ type: "wasted-render" }],
-          causeChain,
-        );
-        patterns.push({
-          type: "wasted-render",
-          severity: "critical",
-          suggestion: `Wrap ${name} with React.memo()`,
-          confidence: confidence.score,
-          reasons: confidence.reasons,
-          impact: `Likely reduces 70-90% of renders`,
-        });
-      }
-    }
-
-    // 4. Deep propagation chain (new pattern)
-    if (causeChain.length > 4) {
+    // 6. Deep propagation
+    if (chain.length > 4) {
       patterns.push({
         type: "deep-propagation",
         severity: "high",
-        suggestion: `Consider memoizing intermediate components in the chain`,
+        chainLength: chain.length,
+        suggestion: `Consider memoizing intermediate components in ${chain.length}-level chain`,
         confidence: 75,
-        impact: `Could prevent cascade re-renders`,
-        chainLength: causeChain.length,
+        impact: "Could break cascade at multiple points",
       });
     }
 
@@ -287,7 +334,106 @@
   }
 
   // =============================
-  // RENDER COST SCORE
+  // PREDICTIVE OPTIMIZATION (BREAKTHROUGH)
+  // =============================
+  function predictOptimizationImpact(fiber, causeChainData, patterns) {
+    const { chain, rootIndex } = causeChainData;
+    const predictions = [];
+
+    // Predict React.memo impact
+    const wastedPattern = patterns.find((p) => p.type === "wasted-chain");
+    if (wastedPattern) {
+      predictions.push({
+        optimization: `React.memo(${getComponentName(fiber)})`,
+        expectedReduction: 95,
+        reasoning:
+          "Component has no prop/state changes, pure parent propagation",
+        confidence: 95,
+      });
+    }
+
+    // Predict useCallback impact
+    const unstableFunc = patterns.find(
+      (p) => p.type === "unstable-function-prop",
+    );
+    if (unstableFunc) {
+      const chainImpact = chain.length - rootIndex;
+      const reduction = Math.min(70 + chainImpact * 5, 95);
+      predictions.push({
+        optimization: `useCallback() for ${unstableFunc.props.join(", ")}`,
+        expectedReduction: reduction,
+        reasoning: `Stabilizing function props would prevent ${chainImpact}-level cascade`,
+        confidence: 85,
+      });
+    }
+
+    // Predict context splitting impact
+    const contextExplosion = patterns.find(
+      (p) => p.type === "context-explosion",
+    );
+    if (contextExplosion) {
+      const reduction = Math.min(
+        60 + contextExplosion.affectedComponents * 3,
+        90,
+      );
+      predictions.push({
+        optimization: "Split context or use selectors",
+        expectedReduction: reduction,
+        reasoning: `${contextExplosion.affectedComponents} components re-render from single context`,
+        confidence: 75,
+      });
+    }
+
+    return predictions;
+  }
+
+  // =============================
+  // CONFIDENCE SCORING
+  // =============================
+  function calculateConfidence(patterns, causeChainData) {
+    let confidence = 0;
+    const reasons = [];
+
+    const { chain, rootCause } = causeChainData;
+
+    // Wasted chain = highest confidence
+    if (patterns.some((p) => p.type === "wasted-chain")) {
+      confidence += 95;
+      reasons.push("Entire chain is wasted renders");
+    }
+
+    // Unstable functions = high confidence
+    if (patterns.some((p) => p.type === "unstable-function-prop")) {
+      confidence += 85;
+      reasons.push("Function reference changes detected");
+    }
+
+    // Context explosion = high confidence
+    if (patterns.some((p) => p.type === "context-explosion")) {
+      confidence += 80;
+      reasons.push("Context causing cascade re-renders");
+    }
+
+    // Root cause type matters
+    if (rootCause?.causeType === "parent") {
+      confidence += 20;
+      reasons.push("Parent-only propagation");
+    }
+
+    // Deep chain amplifies confidence
+    if (chain.length > 4) {
+      confidence += 15;
+      reasons.push(`Deep ${chain.length}-level propagation`);
+    }
+
+    return {
+      score: Math.min(confidence, 100),
+      reasons,
+    };
+  }
+
+  // =============================
+  // RENDER SCORE
   // =============================
   function calculateRenderScore(renders, exclusive, patterns) {
     let score = renders * exclusive;
@@ -309,14 +455,13 @@
   }
 
   // =============================
-  // COMPONENT TREE BUILDING
+  // COMPONENT TREE
   // =============================
   function buildComponentTree(fiber, depth = 0, maxDepth = 15) {
     if (!fiber || depth > maxDepth) return null;
 
     const name = getComponentName(fiber);
 
-    // Skip non-user components but traverse children
     if (!name || !isUserComponent(fiber)) {
       const children = [];
       let child = fiber.child;
@@ -341,6 +486,7 @@
       children: [],
       key: fiber.key || `${name}-${depth}`,
       didRender: data?.rendered || false,
+      causeType: data?.causeType || "unknown",
       renderCount: globalStats.get(name)?.renders || 0,
       score: globalStats.get(name)?.score || 0,
       scoreLabel: globalStats.get(name)
@@ -348,7 +494,6 @@
         : { emoji: "⚪", label: "Low" },
     };
 
-    // Traverse children
     let child = fiber.child;
     while (child) {
       const childNode = buildComponentTree(child, depth + 1, maxDepth);
@@ -418,21 +563,25 @@
   }
 
   // =============================
-  // TRACK ROOT FIBER (ENHANCED)
+  // TRACK ROOT FIBER (ELITE)
   // =============================
   function trackRootFiber(fiber) {
     const name = getComponentName(fiber);
-    if (!name) return;
-    if (!fiber.alternate) return;
+
+    if (!name || !fiber.alternate) return;
 
     const prevFiber = fiber.alternate;
-    const { changes, propDiff } = detectRenderCause(prevFiber, fiber);
+    const { changes, propDiff, causeType } = detectRenderCause(
+      prevFiber,
+      fiber,
+    );
 
-    // Mark this fiber as rendered in current commit
-    const causeChain = buildCauseChain(fiber);
+    // Mark in commit map
+    const causeChainData = buildCauseChain(fiber);
     commitMap.set(fiber, {
       rendered: true,
       cause: { changes, propDiff },
+      causeType,
     });
 
     let record = fiberRenderStore.get(fiber);
@@ -445,10 +594,20 @@
     const total = countSubtreeRenders(fiber);
     const exclusive = countExclusiveRenders(fiber);
 
-    // Pattern detection with causal chain
-    const patterns = detectPatterns(fiber, propDiff, causeChain);
+    // Advanced pattern detection
+    const patterns = detectAdvancedPatterns(fiber, propDiff, causeChainData);
 
-    // Calculate score
+    // Predictive optimization
+    const predictions = predictOptimizationImpact(
+      fiber,
+      causeChainData,
+      patterns,
+    );
+
+    // Confidence scoring
+    const confidenceData = calculateConfidence(patterns, causeChainData);
+
+    // Global stats
     let stat = globalStats.get(name);
     if (!stat) {
       stat = {
@@ -466,7 +625,6 @@
     stat.exclusive += exclusive;
     stat.score = calculateRenderScore(stat.renders, stat.exclusive, patterns);
 
-    // Merge unique patterns
     patterns.forEach((p) => {
       const exists = stat.patterns.find((existing) => existing.type === p.type);
       if (!exists) stat.patterns.push(p);
@@ -480,7 +638,11 @@
       changes,
       propDiff,
       patterns,
-      causeChain, // TRUE CAUSAL CHAIN
+      causeChain: causeChainData.chain,
+      rootIndex: causeChainData.rootIndex,
+      rootCause: causeChainData.rootCause,
+      predictions,
+      confidence: confidenceData,
       timestamp: Date.now(),
       score: calculateRenderScore(record.count, exclusive, patterns),
       scoreLabel: getScoreLabel(
@@ -529,7 +691,6 @@
 
     renderTimeline.push(timelineEntry);
 
-    // Keep last 100 commits
     if (renderTimeline.length > 100) {
       renderTimeline.shift();
     }
@@ -560,7 +721,7 @@
               source: "react-render-tracker",
               payload: JSON.parse(JSON.stringify(currentCommitUpdates)),
               componentTree: tree,
-              timeline: renderTimeline.slice(-50), // Last 50 commits
+              timeline: renderTimeline.slice(-50),
               globalStats: Array.from(globalStats.entries()).map(
                 ([name, stat]) => ({
                   name,
@@ -582,7 +743,7 @@
 
     hook.__RENDER_TRACKER_PATCHED__ = true;
     console.log(
-      "%c[Tracker] 🔥 Production-Level Tracker Active",
+      "%c[Tracker] 🔥 ELITE Tracker Active",
       "color:green;font-weight:bold;font-size:14px;",
     );
   }

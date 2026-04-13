@@ -13,13 +13,17 @@ const App = () => {
   const [autoInsights, setAutoInsights] = useState([]);
   const canvasRef = useRef(null);
 
-  // Responsive layout state
+  // Sidebar resize
   const [sidebarWidth, setSidebarWidth] = useState(450);
   const [isResizing, setIsResizing] = useState(false);
+
+  // Connection status
+  const [isConnected, setIsConnected] = useState(false);
 
   useEffect(() => {
     window.portPromise.then((port) => {
       console.log("[App.jsx] Port ready, attaching listener");
+      setIsConnected(true);
 
       port.onMessage.addListener((message) => {
         if (message.type !== "FOR_DEVTOOLS") return;
@@ -44,6 +48,10 @@ const App = () => {
                 patterns: [],
                 propDiff: [],
                 causeChain: [],
+                rootIndex: -1,
+                rootCause: null,
+                predictions: [],
+                confidence: null,
                 score: 0,
                 scoreLabel: { emoji: "⚪", label: "Low" },
               };
@@ -56,6 +64,10 @@ const App = () => {
             next[u.name].propDiff = u.propDiff || [];
             next[u.name].patterns = u.patterns || [];
             next[u.name].causeChain = u.causeChain || [];
+            next[u.name].rootIndex = u.rootIndex ?? -1;
+            next[u.name].rootCause = u.rootCause || null;
+            next[u.name].predictions = u.predictions || [];
+            next[u.name].confidence = u.confidence || null;
             next[u.name].score = u.score || 0;
             next[u.name].scoreLabel = u.scoreLabel || {
               emoji: "⚪",
@@ -94,7 +106,7 @@ const App = () => {
         if (tree) setComponentTree(tree);
         if (timelineData.length > 0) {
           setTimeline(timelineData);
-          setTimelineIndex(timelineData.length - 1); // Auto-select latest
+          setTimelineIndex(timelineData.length - 1);
         }
         if (stats.length > 0) setGlobalStats(stats);
 
@@ -103,28 +115,59 @@ const App = () => {
     });
   }, []);
 
-  // Auto Insights Generation (Enhanced)
+  // Auto Insights (Enhanced with new patterns)
   const generateAutoInsights = (updates) => {
     const insights = [];
 
     updates.forEach((u) => {
-      // Wasted renders with confidence
-      const wastedPattern = u.patterns?.find((p) => p.type === "wasted-render");
-      if (wastedPattern) {
+      // Wasted Chain (CRITICAL)
+      const wastedChain = u.patterns?.find((p) => p.type === "wasted-chain");
+      if (wastedChain) {
         insights.push({
-          type: "wasted-render",
+          type: "wasted-chain",
           severity: "critical",
           component: u.name,
-          message: `${u.name} re-rendered ${u.exclusive} times with no prop/state changes`,
-          suggestion: wastedPattern.suggestion,
-          confidence: wastedPattern.confidence,
-          reasons: wastedPattern.reasons || [],
-          impact: wastedPattern.impact,
+          message: `🔥 ENTIRE ${wastedChain.chainLength}-level chain is wasted re-renders`,
+          suggestion: wastedChain.suggestion,
+          confidence: wastedChain.confidence,
+          impact: wastedChain.impact,
           timestamp: Date.now(),
         });
       }
 
-      // Unstable function props with confidence
+      // Context Explosion
+      const contextExplosion = u.patterns?.find(
+        (p) => p.type === "context-explosion",
+      );
+      if (contextExplosion) {
+        insights.push({
+          type: "context-explosion",
+          severity: "critical",
+          component: u.name,
+          message: `🌐 Context in ${contextExplosion.rootComponent} caused ${contextExplosion.affectedComponents} downstream re-renders`,
+          suggestion: contextExplosion.suggestion,
+          confidence: contextExplosion.confidence,
+          impact: contextExplosion.impact,
+          timestamp: Date.now(),
+        });
+      }
+
+      // Prop Cascade
+      const propCascade = u.patterns?.find((p) => p.type === "prop-cascade");
+      if (propCascade) {
+        insights.push({
+          type: "prop-cascade",
+          severity: "high",
+          component: u.name,
+          message: `🔁 Prop drilling: ${propCascade.props.join(", ")} through ${propCascade.depth} levels`,
+          suggestion: propCascade.suggestion,
+          confidence: propCascade.confidence,
+          impact: propCascade.impact,
+          timestamp: Date.now(),
+        });
+      }
+
+      // Unstable functions
       const funcPattern = u.patterns?.find(
         (p) => p.type === "unstable-function-prop",
       );
@@ -150,24 +193,10 @@ const App = () => {
           type: "deep-propagation",
           severity: "high",
           component: u.name,
-          message: `${u.name} is part of a ${deepPattern.chainLength}-level propagation chain`,
+          message: `${deepPattern.chainLength}-level propagation chain`,
           suggestion: deepPattern.suggestion,
           confidence: deepPattern.confidence,
           impact: deepPattern.impact,
-          timestamp: Date.now(),
-        });
-      }
-
-      // High exclusive count
-      if (u.exclusive > 15) {
-        insights.push({
-          type: "expensive-subtree",
-          severity: "high",
-          component: u.name,
-          message: `${u.name} caused ${u.exclusive} exclusive re-renders`,
-          suggestion: "Check if child components need memoization",
-          confidence: 65,
-          impact: "May reduce render cascade",
           timestamp: Date.now(),
         });
       }
@@ -184,6 +213,23 @@ const App = () => {
       });
       return unique.slice(0, 10);
     });
+  };
+
+  // Reset functionality
+  const handleReset = () => {
+    if (
+      window.confirm(
+        "Reset all tracking data? This will clear all stats and history.",
+      )
+    ) {
+      setComponents({});
+      setRecentUpdates([]);
+      setAutoInsights([]);
+      setTimeline([]);
+      setComponentTree(null);
+      setSelectedComponent(null);
+      console.log("[App.jsx] Data reset");
+    }
   };
 
   const sortedComponents = useMemo(() => {
@@ -233,13 +279,19 @@ const App = () => {
     return "#991b1b";
   };
 
-  const getRenderCauseIcon = (changes) => {
-    if (!changes || changes.length === 0) return "⬆️";
-    const types = changes.map((c) => c.type);
-    if (types.includes("props")) return "🔁";
-    if (types.includes("state")) return "🧠";
-    if (types.includes("context")) return "🌐";
-    return "⬆️";
+  const getCauseIcon = (causeType) => {
+    switch (causeType) {
+      case "state":
+        return "🧠";
+      case "props":
+        return "🔁";
+      case "context":
+        return "🌐";
+      case "parent":
+        return "⬆️";
+      default:
+        return "❓";
+    }
   };
 
   const formatRenderCauses = (changes) => {
@@ -258,7 +310,7 @@ const App = () => {
       .join(" • ");
   };
 
-  // Flamegraph rendering
+  // Flamegraph
   useEffect(() => {
     if (
       viewMode === "flamegraph" &&
@@ -309,7 +361,7 @@ const App = () => {
     });
   };
 
-  // Component Tree Renderer (Fixed)
+  // Component Tree Renderer
   const renderComponentTree = (node, depth = 0) => {
     if (!node) return null;
     if (Array.isArray(node)) {
@@ -350,12 +402,15 @@ const App = () => {
           }}
         >
           <span style={{ width: "16px" }}>{hasChildren ? "▼" : "▪️"}</span>
+          <span style={{ width: "20px", fontSize: "14px" }}>
+            {getCauseIcon(node.causeType)}
+          </span>
           <span style={{ fontFamily: "monospace", fontWeight: 500, flex: 1 }}>
             {node.name}
           </span>
           <span style={{ fontSize: "16px" }}>{node.scoreLabel.emoji}</span>
           <span style={{ fontSize: "11px", color: "#6b7280" }}>
-            {node.renderCount} renders
+            {node.renderCount}
           </span>
         </div>
         {hasChildren && (
@@ -369,7 +424,7 @@ const App = () => {
     );
   };
 
-  // Timeline View (Fixed)
+  // Timeline
   const currentTimelineEntry = useMemo(() => {
     if (
       timeline.length === 0 ||
@@ -387,9 +442,6 @@ const App = () => {
         <div style={{ padding: "40px", textAlign: "center", color: "#9ca3af" }}>
           <div style={{ fontSize: "48px", marginBottom: "16px" }}>⏳</div>
           <p>No timeline data yet</p>
-          <p style={{ fontSize: "11px", marginTop: "8px" }}>
-            Interact with your React app to populate timeline
-          </p>
         </div>
       );
     }
@@ -580,9 +632,51 @@ const App = () => {
             flexShrink: 0,
           }}
         >
-          <h2 style={{ margin: 0, fontSize: "16px", fontWeight: 600 }}>
-            🔥 Render Tracker Pro
-          </h2>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <h2 style={{ margin: 0, fontSize: "16px", fontWeight: 600 }}>
+              🔥 Render Tracker Elite
+            </h2>
+            <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+              <div
+                style={{
+                  width: "8px",
+                  height: "8px",
+                  borderRadius: "50%",
+                  background: isConnected ? "#10b981" : "#ef4444",
+                }}
+              />
+              <span style={{ fontSize: "11px", color: "#6b7280" }}>
+                {isConnected ? "Connected" : "Disconnected"}
+              </span>
+              <button
+                onClick={handleReset}
+                style={{
+                  padding: "4px 12px",
+                  background: "#ef4444",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "4px",
+                  fontSize: "12px",
+                  cursor: "pointer",
+                  fontWeight: 500,
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "#dc2626";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "#ef4444";
+                }}
+              >
+                Reset Data
+              </button>
+            </div>
+          </div>
           <div
             style={{
               marginTop: "8px",
@@ -643,7 +737,23 @@ const App = () => {
 
         {/* Content Area */}
         <div style={{ flex: 1, overflow: "auto", background: "white" }}>
-          {viewMode === "table" && (
+          {!isConnected && (
+            <div
+              style={{
+                padding: "40px",
+                textAlign: "center",
+                color: "#9ca3af",
+              }}
+            >
+              <div style={{ fontSize: "48px", marginBottom: "16px" }}>⚠️</div>
+              <p>Waiting for connection...</p>
+              <p style={{ fontSize: "11px", marginTop: "8px" }}>
+                If data doesn't appear, refresh the page with DevTools open
+              </p>
+            </div>
+          )}
+
+          {isConnected && viewMode === "table" && (
             <>
               {sortedComponents.length === 0 ? (
                 <div
@@ -657,6 +767,9 @@ const App = () => {
                     ⏳
                   </div>
                   <p>Waiting for render data...</p>
+                  <p style={{ fontSize: "11px", marginTop: "8px" }}>
+                    Interact with your React app
+                  </p>
                 </div>
               ) : (
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -727,7 +840,7 @@ const App = () => {
                           width: "80px",
                         }}
                       >
-                        Why
+                        Root
                       </th>
                       <th
                         style={{
@@ -823,7 +936,9 @@ const App = () => {
                               fontSize: "16px",
                             }}
                           >
-                            {getRenderCauseIcon(stats.lastChanges)}
+                            {stats.rootCause
+                              ? getCauseIcon(stats.rootCause.causeType)
+                              : "—"}
                           </td>
                           <td
                             style={{ padding: "10px 16px", fontSize: "11px" }}
@@ -958,7 +1073,7 @@ const App = () => {
         }}
       />
 
-      {/* Right Sidebar (Resizable) */}
+      {/* Right Sidebar */}
       <div
         style={{
           width: `${sidebarWidth}px`,
@@ -973,7 +1088,7 @@ const App = () => {
         {/* Auto Insights */}
         <div
           style={{
-            maxHeight: "200px",
+            maxHeight: "250px",
             minHeight: "120px",
             overflow: "auto",
             borderBottom: "1px solid #e5e7eb",
@@ -1002,7 +1117,11 @@ const App = () => {
               </p>
             ) : (
               <div
-                style={{ display: "flex", flexDirection: "column", gap: "8px" }}
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "8px",
+                }}
               >
                 {autoInsights.map((insight, idx) => (
                   <div
@@ -1011,7 +1130,9 @@ const App = () => {
                       padding: "10px",
                       background:
                         insight.severity === "critical" ? "#fee2e2" : "#fed7aa",
-                      borderLeft: `3px solid ${insight.severity === "critical" ? "#dc2626" : "#f59e0b"}`,
+                      borderLeft: `3px solid ${
+                        insight.severity === "critical" ? "#dc2626" : "#f59e0b"
+                      }`,
                       borderRadius: "4px",
                       fontSize: "11px",
                     }}
@@ -1035,13 +1156,6 @@ const App = () => {
                         }}
                       >
                         Confidence: {insight.confidence}%
-                        {insight.reasons && insight.reasons.length > 0 && (
-                          <div style={{ marginTop: "2px" }}>
-                            {insight.reasons.map((r, i) => (
-                              <div key={i}>• {r}</div>
-                            ))}
-                          </div>
-                        )}
                       </div>
                     )}
                     <div
@@ -1150,7 +1264,7 @@ const App = () => {
                 </div>
               </div>
 
-              {/* TRUE CAUSAL CHAIN */}
+              {/* TRUE CAUSAL CHAIN (ELITE) */}
               {components[selectedComponent].causeChain &&
                 components[selectedComponent].causeChain.length > 0 && (
                   <div style={{ marginBottom: "20px" }}>
@@ -1162,7 +1276,7 @@ const App = () => {
                         color: "#374151",
                       }}
                     >
-                      🔥 True Causal Chain
+                      🔥 True Root Cause Chain
                     </h4>
                     <div
                       style={{
@@ -1175,33 +1289,135 @@ const App = () => {
                       }}
                     >
                       {components[selectedComponent].causeChain.map(
-                        (chain, idx) => (
-                          <div
-                            key={idx}
-                            style={{
-                              marginBottom:
-                                idx <
-                                components[selectedComponent].causeChain
-                                  .length -
-                                  1
-                                  ? "8px"
-                                  : "0",
-                            }}
-                          >
-                            <div style={{ fontWeight: 600 }}>{chain.name}</div>
-                            {idx <
-                              components[selectedComponent].causeChain.length -
-                                1 && (
+                        (chain, idx) => {
+                          const isRoot =
+                            idx === components[selectedComponent].rootIndex;
+                          return (
+                            <div
+                              key={idx}
+                              style={{
+                                marginBottom:
+                                  idx <
+                                  components[selectedComponent].causeChain
+                                    .length -
+                                    1
+                                    ? "8px"
+                                    : "0",
+                                background: isRoot ? "#dbeafe" : "transparent",
+                                padding: isRoot ? "6px" : "0",
+                                borderRadius: isRoot ? "4px" : "0",
+                              }}
+                            >
                               <div
                                 style={{
-                                  color: "#6b7280",
-                                  marginLeft: "8px",
-                                  fontSize: "11px",
+                                  fontWeight: 600,
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "8px",
                                 }}
                               >
-                                ↑ {formatRenderCauses(chain.cause.changes)}
+                                {isRoot && (
+                                  <span
+                                    style={{
+                                      fontSize: "10px",
+                                      background: "#ef4444",
+                                      color: "white",
+                                      padding: "2px 6px",
+                                      borderRadius: "3px",
+                                    }}
+                                  >
+                                    ROOT
+                                  </span>
+                                )}
+                                {getCauseIcon(chain.causeType)} {chain.name}
                               </div>
-                            )}
+                              {idx <
+                                components[selectedComponent].causeChain
+                                  .length -
+                                  1 && (
+                                <div
+                                  style={{
+                                    color: "#6b7280",
+                                    marginLeft: "8px",
+                                    fontSize: "11px",
+                                    marginTop: "2px",
+                                  }}
+                                >
+                                  ↑ propagates via {chain.causeType}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        },
+                      )}
+                    </div>
+                  </div>
+                )}
+
+              {/* PREDICTIVE OPTIMIZATION (BREAKTHROUGH) */}
+              {components[selectedComponent].predictions &&
+                components[selectedComponent].predictions.length > 0 && (
+                  <div style={{ marginBottom: "20px" }}>
+                    <h4
+                      style={{
+                        margin: "0 0 8px 0",
+                        fontSize: "12px",
+                        fontWeight: 600,
+                        color: "#374151",
+                      }}
+                    >
+                      🔮 Predictive Optimization
+                    </h4>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "8px",
+                      }}
+                    >
+                      {components[selectedComponent].predictions.map(
+                        (pred, i) => (
+                          <div
+                            key={i}
+                            style={{
+                              padding: "10px",
+                              background: "#f0fdf4",
+                              border: "1px solid #10b981",
+                              borderRadius: "4px",
+                              fontSize: "11px",
+                            }}
+                          >
+                            <div
+                              style={{
+                                fontWeight: 600,
+                                marginBottom: "4px",
+                                color: "#065f46",
+                              }}
+                            >
+                              {pred.optimization}
+                            </div>
+                            <div
+                              style={{
+                                fontSize: "18px",
+                                fontWeight: 700,
+                                color: "#10b981",
+                                marginBottom: "4px",
+                              }}
+                            >
+                              ~{pred.expectedReduction}% reduction
+                            </div>
+                            <div
+                              style={{
+                                fontSize: "10px",
+                                color: "#4b5563",
+                                marginBottom: "4px",
+                              }}
+                            >
+                              Confidence: {pred.confidence}%
+                            </div>
+                            <div style={{ fontSize: "10px", color: "#6b7280" }}>
+                              {pred.reasoning}
+                            </div>
                           </div>
                         ),
                       )}
@@ -1274,33 +1490,6 @@ const App = () => {
                 </div>
               )}
 
-              {/* Last Render Reason */}
-              <div style={{ marginBottom: "20px" }}>
-                <h4
-                  style={{
-                    margin: "0 0 8px 0",
-                    fontSize: "12px",
-                    fontWeight: 600,
-                    color: "#374151",
-                  }}
-                >
-                  Last Render Reason
-                </h4>
-                <div
-                  style={{
-                    padding: "10px",
-                    background: "#fef3c7",
-                    borderLeft: "3px solid #f59e0b",
-                    borderRadius: "4px",
-                    fontSize: "12px",
-                  }}
-                >
-                  {formatRenderCauses(
-                    components[selectedComponent].lastChanges,
-                  )}
-                </div>
-              </div>
-
               {/* Render History */}
               <div>
                 <h4
@@ -1354,8 +1543,7 @@ const App = () => {
                             }}
                           >
                             <span style={{ fontWeight: 600 }}>
-                              {getRenderCauseIcon(event.changes)} Exclusive:{" "}
-                              {event.exclusive}
+                              Exclusive: {event.exclusive}
                             </span>
                             <span style={{ color: "#6b7280" }}>
                               {new Date(event.timestamp).toLocaleTimeString()}
@@ -1387,7 +1575,7 @@ const App = () => {
         {/* Live Updates Feed */}
         <div
           style={{
-            height: "220px",
+            height: "200px",
             borderTop: "1px solid #e5e7eb",
             flexShrink: 0,
           }}
