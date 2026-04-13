@@ -145,9 +145,9 @@ const App = () => {
         port.onMessage.addListener((message) => {
           if (!isRecording || message.type !== "FOR_DEVTOOLS") return;
 
-          const updates = message.payload;
+          const updates = message.payload.update;
           const tree =
-            message.componentTree ||
+            message.payload.componentTree ||
             (updates && updates.find((u) => u.isRoot)?.tree);
 
           if (tree) setComponentTree(tree);
@@ -275,6 +275,7 @@ const App = () => {
         <button
           onClick={() => {
             setComponents({});
+            setComponentTree(null);
             setTimeline([]);
             setRecentUpdates([]);
           }}
