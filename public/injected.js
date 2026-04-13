@@ -123,6 +123,7 @@
     if (!fiber) return;
 
     const name = getComponentName(fiber);
+
     if (name && fiber.alternate) {
       const { actualDuration, selfBaseDuration } = fiber;
       const exclusive = parseFloat((actualDuration || 0).toFixed(2));
@@ -161,17 +162,100 @@
     }
   }
 
+  function getFiberName1(fiber) {
+    // Handles functional/class components, intrinsic elements (div, span), and Fragments
+    if (!fiber) return "Unknown";
+    if (typeof fiber.type === "string") return fiber.type;
+    if (typeof fiber.type === "function")
+      return fiber.type.displayName || fiber.type.name || "Anonymous";
+    if (fiber.tag === 7) return "Fragment"; // FiberTag 7 is usually Fragment
+    return "InternalNode";
+  }
+
+  // function buildTree(fiber) {
+  //   if (!fiber) return null;
+
+  //   const node = {
+  //     name: getFiberName1(fiber),
+  //     children: [],
+  //   };
+
+  //   // 1. Move to the first child
+  //   let currentChild = fiber.child;
+
+  //   // 2. Traverse all siblings of that child
+  //   while (currentChild) {
+  //     const childTree = buildTree(currentChild);
+  //     if (childTree) {
+  //       node.children.push(childTree);
+  //     }
+  //     currentChild = currentChild.sibling;
+  //   }
+
+  //   return node;
+  // }
+
+  // function isFunctionalComponent(fiber) {
+  //   const type = fiber.type;
+  //   const tag = fiber.tag;
+
+  //   // Tag 0: FunctionComponent, Tag 2: IndeterminateComponent (before first render)
+  //   const isFunctionTag = tag === 0 || tag === 2;
+
+  //   return (
+  //     isFunctionTag &&
+  //     typeof type === "function" &&
+  //     !(type.prototype && type.prototype.isReactComponent)
+  //   );
+  // }
+
+  // function buildFilteredTree(fiber) {
+  //   if (!fiber) return null;
+
+  //   let node = null;
+
+  //   if (isFunctionalComponent(fiber)) {
+  //     node = {
+  //       name: getComponentName(fiber),
+  //       children: [],
+  //     };
+  //   }
+
+  //   // Traverse children
+  //   let currentChild = fiber.child;
+  //   while (currentChild) {
+  //     const childTree = buildFilteredTree(currentChild);
+
+  //     if (childTree) {
+  //       if (node) {
+  //         // If current fiber is a functional component, add the result to its children
+  //         node.children.push(childTree);
+  //       } else {
+  //         // If current fiber is NOT a functional component (e.g. a div or provider),
+  //         // we "hoist" its functional children up to the parent level.
+  //         return childTree;
+  //       }
+  //     }
+  //     currentChild = currentChild.sibling;
+  //   }
+
+  //   return node;
+  // }
+
   function patch() {
     const hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (!hook || typeof hook.onCommitFiberRoot !== "function") return;
 
     const original = hook.onCommitFiberRoot;
+
     hook.onCommitFiberRoot = function (id, root, ...args) {
       commitCounter++;
       currentCommitUpdates = [];
 
       try {
         traverseFiberTree(root.current);
+        // const test = buildFilteredTree(root.current);
+        // console.log(test);
 
         // Find the root node. In many cases buildComponentTree might return an array
         // if the very first node is a Fragment/Provider.
