@@ -162,142 +162,129 @@
     }
   }
 
-  function getFiberName1(fiber) {
-    // Handles functional/class components, intrinsic elements (div, span), and Fragments
-    if (!fiber) return "Unknown";
-    if (typeof fiber.type === "string") return fiber.type;
-    if (typeof fiber.type === "function")
-      return fiber.type.displayName || fiber.type.name || "Anonymous";
-    if (fiber.tag === 7) return "Fragment"; // FiberTag 7 is usually Fragment
-    return "InternalNode";
-  }
+  // function patch() {
+  //   const hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+  //   if (!hook || typeof hook.onCommitFiberRoot !== "function") return;
 
-  // function buildTree(fiber) {
-  //   if (!fiber) return null;
+  //   const original = hook.onCommitFiberRoot;
 
-  //   const node = {
-  //     name: getFiberName1(fiber),
-  //     children: [],
+  //   hook.onCommitFiberRoot = function (id, root, ...args) {
+  //     commitCounter++;
+  //     currentCommitUpdates = [];
+
+  //     try {
+  //       traverseFiberTree(root.current);
+
+  //       const rawTree = buildComponentTree(root.current);
+  //       const tree = Array.isArray(rawTree) ? rawTree[0] : rawTree;
+
+  //       if (currentCommitUpdates.length > 0) {
+  //         const payload = {
+  //           update: currentCommitUpdates,
+  //           componentTree: tree,
+  //         };
+  //         console.log(payload);
+  //         window.postMessage(
+  //           {
+  //             source: "react-render-tracker",
+  //             type: "FOR_DEVTOOLS",
+  //             payload: JSON.parse(JSON.stringify(payload)),
+  //             componentTree: tree,
+  //             globalStats: Array.from(globalStats.entries()).map(
+  //               ([name, s]) => ({ name, ...s }),
+  //             ),
+  //             commitId: commitCounter,
+  //           },
+  //           "*",
+  //         );
+  //       }
+  //     } catch (e) {
+  //       console.error("[Tracker] Audit Error:", e);
+  //     }
+
+  //     return original.apply(this, [id, root, ...args]);
   //   };
 
-  //   // 1. Move to the first child
-  //   let currentChild = fiber.child;
-
-  //   // 2. Traverse all siblings of that child
-  //   while (currentChild) {
-  //     const childTree = buildTree(currentChild);
-  //     if (childTree) {
-  //       node.children.push(childTree);
-  //     }
-  //     currentChild = currentChild.sibling;
-  //   }
-
-  //   return node;
-  // }
-
-  // function isFunctionalComponent(fiber) {
-  //   const type = fiber.type;
-  //   const tag = fiber.tag;
-
-  //   // Tag 0: FunctionComponent, Tag 2: IndeterminateComponent (before first render)
-  //   const isFunctionTag = tag === 0 || tag === 2;
-
-  //   return (
-  //     isFunctionTag &&
-  //     typeof type === "function" &&
-  //     !(type.prototype && type.prototype.isReactComponent)
+  //   console.log(
+  //     "%c[Tracker] 🔥 ELITE Tracker Active",
+  //     "color:#4ade80;font-weight:bold;font-size:12px;",
   //   );
   // }
 
-  // function buildFilteredTree(fiber) {
-  //   if (!fiber) return null;
-
-  //   let node = null;
-
-  //   if (isFunctionalComponent(fiber)) {
-  //     node = {
-  //       name: getComponentName(fiber),
-  //       children: [],
-  //     };
+  // const interval = setInterval(() => {
+  //   if (window.__REACT_DEVTOOLS_GLOBAL_HOOK__) {
+  //     patch();
+  //     clearInterval(interval);
   //   }
-
-  //   // Traverse children
-  //   let currentChild = fiber.child;
-  //   while (currentChild) {
-  //     const childTree = buildFilteredTree(currentChild);
-
-  //     if (childTree) {
-  //       if (node) {
-  //         // If current fiber is a functional component, add the result to its children
-  //         node.children.push(childTree);
-  //       } else {
-  //         // If current fiber is NOT a functional component (e.g. a div or provider),
-  //         // we "hoist" its functional children up to the parent level.
-  //         return childTree;
-  //       }
-  //     }
-  //     currentChild = currentChild.sibling;
-  //   }
-
-  //   return node;
-  // }
-
+  // }, 100);
   function patch() {
     const hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (!hook || typeof hook.onCommitFiberRoot !== "function") return;
 
     const original = hook.onCommitFiberRoot;
 
-    hook.onCommitFiberRoot = function (id, root, ...args) {
-      commitCounter++;
-      currentCommitUpdates = [];
-
+    // --- HELPER: Process and Send Tree ---
+    const captureAndSend = (root) => {
       try {
-        traverseFiberTree(root.current);
-        // const test = buildFilteredTree(root.current);
-        // console.log(test);
+        commitCounter++;
+        currentCommitUpdates = [];
 
-        // Find the root node. In many cases buildComponentTree might return an array
-        // if the very first node is a Fragment/Provider.
+        traverseFiberTree(root.current);
         const rawTree = buildComponentTree(root.current);
         const tree = Array.isArray(rawTree) ? rawTree[0] : rawTree;
 
-        if (currentCommitUpdates.length > 0) {
-          const payload = {
-            update: currentCommitUpdates,
-            componentTree: tree,
-          };
-          window.postMessage(
-            {
-              source: "react-render-tracker",
-              type: "FOR_DEVTOOLS",
-              payload: JSON.parse(JSON.stringify(payload)),
+        const payload = {
+          source: "react-render-tracker",
+          type: "FOR_DEVTOOLS",
+          payload: JSON.parse(
+            JSON.stringify({
+              update: currentCommitUpdates,
               componentTree: tree,
-              globalStats: Array.from(globalStats.entries()).map(
-                ([name, s]) => ({ name, ...s }),
-              ),
-              commitId: commitCounter,
-            },
-            "*",
-          );
-        }
+            }),
+          ),
+          componentTree: tree,
+          globalStats: Array.from(globalStats.entries()).map(([name, s]) => ({
+            name,
+            ...s,
+          })),
+          commitId: commitCounter,
+        };
+
+        window.postMessage(payload, "*");
       } catch (e) {
         console.error("[Tracker] Audit Error:", e);
       }
+    };
 
+    // 1. MONKEY PATCH for future updates
+    hook.onCommitFiberRoot = function (id, root, ...args) {
+      captureAndSend(root);
       return original.apply(this, [id, root, ...args]);
     };
 
+    // 2. IMMEDIATE CRAWL for the first load
+    // React DevTools maintains a Map of renderers that have already registered
+    if (hook.renderers && hook.renderers.size > 0) {
+      hook.renderers.forEach((renderer) => {
+        // We look for the "containers" (the roots) the renderer is managing
+        if (renderer.getFiberRoots) {
+          const roots = renderer.getFiberRoots(1); // 1 is the typical ID for the first renderer
+          roots.forEach((root) => captureAndSend(root));
+        }
+      });
+    }
+
     console.log(
-      "%c[Tracker] 🔥 ELITE Tracker Active",
-      "color:#4ade80;font-weight:bold;font-size:12px;",
+      "%c[Tracker] 🔥 ELITE Tracker Active & Initialized",
+      "color:#4ade80;font-weight:bold;",
     );
   }
 
+  // Ensure the script runs as early as possible
   const interval = setInterval(() => {
     if (window.__REACT_DEVTOOLS_GLOBAL_HOOK__) {
       patch();
       clearInterval(interval);
     }
-  }, 100);
+  }, 10); // Tightened interval for faster hijacking
 })();

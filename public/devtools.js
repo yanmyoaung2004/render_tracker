@@ -1,4 +1,3 @@
-// devtools.js
 const port = chrome.runtime.connect({ name: "devtools-panel" });
 
 // 1. Send the INIT signal immediately
