@@ -1,25 +1,41 @@
-const port = chrome.runtime.connect({ name: "devtools-panel" });
+let port;
+try {
+  port = chrome.runtime.connect({ name: "devtools-panel" });
+} catch (e) {
+  console.error("[DevTools] Failed to connect extension port:", e);
+  throw e;
+}
 
-// 1. Send the INIT signal immediately
 port.postMessage({
   type: "INIT",
   tabId: chrome.devtools.inspectedWindow.tabId,
 });
 
-// 2. Listen for messages from background (for debugging)
 port.onMessage.addListener((msg) => {
+  if (msg?.type === "FOR_DEVTOOLS") return;
   console.log("[DevTools] Message from background:", msg);
 });
 
+// Built panel: run `npm run build` and load the `dist/` folder as the unpacked extension.
 chrome.devtools.panels.create(
   "Render Tracker",
   "",
-  "src/panel/index.html", // Verify this path matches your 'dist' folder structure
+  "panel.html",
   (panel) => {
+    if (chrome.runtime.lastError) {
+      console.error(
+        "[DevTools] panels.create failed:",
+        chrome.runtime.lastError.message,
+      );
+      return;
+    }
     panel.onShown.addListener((panelWindow) => {
-      // 3. Pass the port to the React UI
       if (panelWindow && typeof panelWindow.initPort === "function") {
-        panelWindow.initPort(port);
+        try {
+          panelWindow.initPort(port);
+        } catch (e) {
+          console.error("[DevTools] initPort failed:", e);
+        }
       }
     });
   },

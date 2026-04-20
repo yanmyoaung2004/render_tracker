@@ -22,21 +22,28 @@ const App = () => {
 
   useEffect(() => {
     window.portPromise.then((port) => {
-      console.log("[App.jsx] Port ready, attaching listener");
+      if (!port?.onMessage) {
+        console.error("[App] Invalid devtools port");
+        return;
+      }
       setIsConnected(true);
 
       port.onMessage.addListener((message) => {
-        if (message.type !== "FOR_DEVTOOLS") return;
+        try {
+          if (message?.type !== "FOR_DEVTOOLS" || !message.payload) return;
 
-        const updates = message.payload.currentCommitUpdates;
-        const tree = message.payload.componentTree;
-        const timelineData = message.payload.timeline || [];
-        const stats = message.payload.globalStats || [];
+          const payload = message.payload;
+          const updates = payload.currentCommitUpdates;
+          if (!Array.isArray(updates)) return;
 
-        setComponents((prev) => {
-          const next = { ...prev };
+          const tree = payload.componentTree;
+          const timelineData = payload.timeline || [];
+          const stats = payload.globalStats || [];
 
-          updates.forEach((u) => {
+          setComponents((prev) => {
+            const next = { ...prev };
+
+            updates.forEach((u) => {
             if (!next[u.name]) {
               next[u.name] = {
                 renders: 0,
@@ -87,30 +94,33 @@ const App = () => {
               commitId: u.commitId,
             });
 
-            if (next[u.name].history.length > 10) {
-              next[u.name].history.shift();
-            }
+              if (next[u.name].history.length > 10) {
+                next[u.name].history.shift();
+              }
+            });
+
+            return next;
           });
 
-          return next;
-        });
+          setRecentUpdates((prev) => {
+            const newUpdates = updates.map((u) => ({
+              ...u,
+              id: `${u.name}-${Date.now()}-${Math.random()}`,
+            }));
+            return [...newUpdates, ...prev].slice(0, 20);
+          });
 
-        setRecentUpdates((prev) => {
-          const newUpdates = updates.map((u) => ({
-            ...u,
-            id: `${u.name}-${Date.now()}-${Math.random()}`,
-          }));
-          return [...newUpdates, ...prev].slice(0, 20);
-        });
+          if (tree) setComponentTree(tree);
+          if (timelineData.length > 0) {
+            setTimeline(timelineData);
+            setTimelineIndex(timelineData.length - 1);
+          }
+          if (stats.length > 0) setGlobalStats(stats);
 
-        if (tree) setComponentTree(tree);
-        if (timelineData.length > 0) {
-          setTimeline(timelineData);
-          setTimelineIndex(timelineData.length - 1);
+          generateAutoInsights(updates);
+        } catch (e) {
+          console.error("[App] Message handler error:", e);
         }
-        if (stats.length > 0) setGlobalStats(stats);
-
-        generateAutoInsights(updates);
       });
     });
   }, []);

@@ -1,18 +1,17 @@
 {
   "name": "dev1",
   "version": "1.0.0",
-  "description": "",
-  "main": "background.js",
-  "directories": {
-    "test": "test"
-  },
+  "description": "React Render Tracker — Chrome DevTools extension",
+  "private": true,
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "vite build --watch",
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
     "@vitejs/plugin-react": "^6.0.1",
     "lucide-react": "^1.8.0",

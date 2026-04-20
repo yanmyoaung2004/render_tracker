@@ -1,8 +1,14 @@
 (function () {
+  /** React reconcile flag: Update (React 17–19). May need adjustment for future majors. */
+  const REACT_FLAG_UPDATE = 4;
+  const MAX_TIMELINE_ENTRIES = 80;
+  const MAX_PAYLOAD_CHARS = 1_500_000;
+  const HOOK_WAIT_MAX_ATTEMPTS = 200;
+  const HOOK_POLL_MS = 50;
+
   const fiberRenderStore = new WeakMap();
   const globalStats = new Map();
   let currentCommitUpdates = [];
-  let lastPrintTime = 0;
   const renderTimeline = [];
   const commitMap = new WeakMap();
   let commitCounter = 0;
@@ -100,13 +106,20 @@
     return isCapitalized;
   }
 
-  function isTopLevelUserComponent(fiber) {
-    if (fiber.type && typeof fiber.type !== "string") {
-      if (!isUserComponent(fiber)) return false;
-      const owner = fiber._debugOwner;
-      return isUserComponent(owner);
-    }
-    return false;
+  /** Nested user component under another user component — subtree boundary for exclusive counts. */
+  function isExclusiveSubtreeBoundary(fiber) {
+    if (!fiber?.type || typeof fiber.type === "string" || !fiber.alternate)
+      return false;
+    if (!isUserComponent(fiber)) return false;
+    const owner = fiber._debugOwner;
+    return !!(owner && isUserComponent(owner));
+  }
+
+  /** User component fibers we record on each commit (function/class/memo/forwardRef). */
+  function isTrackableRenderFiber(fiber) {
+    if (!fiber?.alternate) return false;
+    if (![0, 1, 11, 14, 15].includes(fiber.tag)) return false;
+    return isUserComponent(fiber);
   }
 
   // =============================
@@ -176,10 +189,8 @@
   // RENDER CAUSE DETECTION
   // =============================
   function detectRenderCause(prevFiber, fiber) {
-    const prevProps = prevFiber.memoizedProps;
-    const nextProps = fiber.memoizedProps;
-    const prevState = prevFiber.memoizedState;
-    const nextState = fiber.memoizedState;
+    const prevProps = prevFiber.memoizedProps || {};
+    const nextProps = fiber.memoizedProps || {};
 
     const changes = [];
     const propDiff = getDetailedPropDiff(prevProps, nextProps);
@@ -192,12 +203,27 @@
       });
     }
 
-    if (prevState !== nextState) {
-      changes.push({ type: "state" });
+    let contextChanged = false;
+    try {
+      const pd = fiber.dependencies;
+      const apd = prevFiber.dependencies;
+      if (pd != null || apd != null) {
+        contextChanged = pd !== apd;
+      }
+    } catch (_) {}
+
+    if (contextChanged) {
+      changes.push({ type: "context" });
     }
 
-    if (fiber.dependencies) {
-      changes.push({ type: "context" });
+    const stateLike =
+      propDiff.length === 0 &&
+      !contextChanged &&
+      typeof fiber.flags === "number" &&
+      (fiber.flags & REACT_FLAG_UPDATE) !== 0;
+
+    if (stateLike) {
+      changes.push({ type: "state" });
     }
 
     if (changes.length === 0) {
@@ -473,9 +499,9 @@
     if (!fiber || depth > maxDepth) return null;
 
     const name = getComponentName(fiber);
-    if (typeof fiber.type === "function") {
-      console.log(fiber.type.type);
-    }
+    // if (typeof fiber.type === "function") {
+    // console.log(fiber.type.name);
+    // }
 
     if (!name || !isUserComponent(fiber)) {
       const children = [];
@@ -553,7 +579,7 @@
 
     function walk(node) {
       if (!node) return;
-      if (node !== rootFiber && isTopLevelUserComponent(node)) {
+      if (node !== rootFiber && isExclusiveSubtreeBoundary(node)) {
         roots.push(node);
         return;
       }
@@ -674,7 +700,7 @@
     let node = rootFiber;
 
     while (node) {
-      if (isTopLevelUserComponent(node)) {
+      if (isTrackableRenderFiber(node)) {
         trackRootFiber(node);
       }
 
@@ -696,17 +722,59 @@
   // =============================
   // TIMELINE
   // =============================
+  function cloneSerializable(value) {
+    try {
+      if (typeof structuredClone === "function") {
+        return structuredClone(value);
+      }
+    } catch (_) {}
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch (e) {
+      console.warn("[Tracker] Serialization failed:", e);
+      return null;
+    }
+  }
+
+  function estimateJsonSize(obj) {
+    try {
+      return JSON.stringify(obj).length;
+    } catch {
+      return Number.MAX_SAFE_INTEGER;
+    }
+  }
+
+  function trimHeavyPayload(payload) {
+    if (estimateJsonSize(payload) <= MAX_PAYLOAD_CHARS) return payload;
+    return {
+      ...payload,
+      timeline: Array.isArray(payload.timeline)
+        ? payload.timeline.slice(-25)
+        : [],
+      currentCommitUpdates: Array.isArray(payload.currentCommitUpdates)
+        ? payload.currentCommitUpdates.slice(0, 120)
+        : [],
+      componentTree: payload.componentTree,
+      globalStats: Array.isArray(payload.globalStats)
+        ? payload.globalStats.slice(0, 200)
+        : [],
+    };
+  }
+
   function addToTimeline(updates, tree) {
+    const clonedUpdates = cloneSerializable(updates);
+    if (!clonedUpdates) return;
+
     const timelineEntry = {
       timestamp: Date.now(),
       commitId: commitCounter,
-      updates: JSON.parse(JSON.stringify(updates)),
+      updates: clonedUpdates,
       componentTree: tree,
     };
 
     renderTimeline.push(timelineEntry);
 
-    if (renderTimeline.length > 100) {
+    while (renderTimeline.length > MAX_TIMELINE_ENTRIES) {
       renderTimeline.shift();
     }
   }
@@ -718,12 +786,26 @@
     if (hook.__RENDER_TRACKER_PATCHED__) return;
 
     const original = hook.onCommitFiberRoot;
+    if (typeof original !== "function") {
+      console.warn("[Tracker] onCommitFiberRoot missing; cannot patch.");
+      return;
+    }
 
     hook.onCommitFiberRoot = function (id, root, ...args) {
+      let commitResult;
+      try {
+        commitResult = original.apply(this, [id, root, ...args]);
+      } catch (e) {
+        console.error("[Tracker] React commit hook error:", e);
+        throw e;
+      }
+
       commitCounter++;
       currentCommitUpdates = [];
 
       try {
+        if (!root?.current) return commitResult;
+
         traverseFiberTree(root.current);
 
         const tree = buildComponentTree(root.current);
@@ -743,45 +825,51 @@
             ),
           };
 
+          const safe = trimHeavyPayload(payload);
+          const cloned = cloneSerializable(safe);
+          if (!cloned) return commitResult;
+
+          const origin = window.location.origin;
+          const targetOrigin =
+            origin && origin !== "null" && origin !== "undefined"
+              ? origin
+              : "*";
+
           window.postMessage(
             {
               source: "react-render-tracker",
-              payload: JSON.parse(JSON.stringify(payload)),
-              // componentTree: tree,
-              // timeline: renderTimeline.slice(-50),
-              // globalStats: Array.from(globalStats.entries()).map(
-              //   ([name, stat]) => ({
-              //     name,
-              //     ...stat,
-              //     scoreLabel: getScoreLabel(stat.score),
-              //   }),
-              // ),
+              payload: cloned,
               commitId: commitCounter,
             },
-            "*",
+            targetOrigin,
           );
         }
       } catch (e) {
-        console.error("[Tracker] Error:", e);
+        console.error("[Tracker] Collection error:", e);
       }
 
-      return original.apply(this, [id, root, ...args]);
+      return commitResult;
     };
 
     hook.__RENDER_TRACKER_PATCHED__ = true;
     console.log(
-      "%c[Tracker] 🔥 ELITE Tracker Active",
-      "color:green;font-weight:bold;font-size:14px;",
+      "%c[Tracker] Render tracker active",
+      "color:#059669;font-weight:bold;",
     );
   }
 
+  let hookWaitAttempts = 0;
   function waitForHook() {
     const hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
 
-    if (hook && hook.onCommitFiberRoot) {
+    if (hook && typeof hook.onCommitFiberRoot === "function") {
       patchReactHook(hook);
+    } else if (hookWaitAttempts++ < HOOK_WAIT_MAX_ATTEMPTS) {
+      setTimeout(waitForHook, HOOK_POLL_MS);
     } else {
-      setTimeout(waitForHook, 50);
+      console.warn(
+        "[Tracker] React DevTools global hook not found (not a React app or script ran too late).",
+      );
     }
   }
 
