@@ -203,6 +203,9 @@ export default function App() {
   var _useState17 = useState(false);
   var liveFeedExpanded = _useState17[0];
   var setLiveFeedExpanded = _useState17[1];
+  var _useState18 = useState(null);
+  var expandedRule = _useState18[0];
+  var setExpandedRule = _useState18[1];
 
   var _useReducer = useReducer(componentsReducer, {});
   var components = _useReducer[0];
@@ -436,9 +439,37 @@ export default function App() {
   }, [selectedData]);
 
   var handleExport = useCallback(function () {
+    var comps = components;
+    var totalRenders = 0;
+    var entries = Object.entries(comps);
+    var topByScore = [].concat(entries).sort(function (a, b) { return b[1].score - a[1].score; }).slice(0, 10);
+    var topByRenders = [].concat(entries).sort(function (a, b) { return b[1].renders - a[1].renders; }).slice(0, 10);
+    for (var i = 0; i < entries.length; i++) { totalRenders += entries[i][1].renders || 0; }
+
+    // Aggregate rules across all components
+    var ruleAgg = {};
+    for (var i = 0; i < entries.length; i++) {
+      var stats = entries[i][1];
+      var rules = evaluateRules(stats, stats);
+      for (var j = 0; j < rules.length; j++) {
+        var key = rules[j].id + "-" + entries[i][0];
+        ruleAgg[key] = { rule: rules[j].id, name: rules[j].name, severity: rules[j].severity, component: entries[i][0], suggestion: rules[j].suggestion, confidence: rules[j].confidence };
+      }
+    }
+
     var data = {
       exportedAt: new Date().toISOString(),
-      components: components,
+      tool: "React Render Tracker",
+      sessionSummary: {
+        totalComponents: Object.keys(comps).length,
+        totalRenders: totalRenders,
+        totalCommits: renderCount,
+        topByScore: topByScore.map(function (e) { return { name: e[0], score: e[1].score, renders: e[1].renders, exclusive: e[1].exclusive }; }),
+        topByRenders: topByRenders.map(function (e) { return { name: e[0], renders: e[1].renders, score: e[1].score }; }),
+        totalMatchedRules: Object.keys(ruleAgg).length,
+      },
+      components: comps,
+      matchedRules: ruleAgg,
       timeline: timeline,
       globalStats: globalStats,
       autoInsights: autoInsights,
@@ -447,10 +478,10 @@ export default function App() {
     var url = URL.createObjectURL(blob);
     var a = document.createElement("a");
     a.href = url;
-    a.download = "render-data-" + Date.now() + ".json";
+    a.download = "render-tracker-report-" + Date.now() + ".json";
     a.click();
     URL.revokeObjectURL(url);
-  }, [components, timeline, globalStats, autoInsights]);
+  }, [components, timeline, globalStats, autoInsights, renderCount]);
 
   var handleResetPartial = useCallback(function (type) {
     setShowResetMenu(false);
@@ -676,6 +707,94 @@ export default function App() {
     );
   }
 
+  function renderSessionView() {
+    var sortedByRenders = Object.entries(components).sort(function (a, b) { return b[1].renders - a[1].renders; });
+    var sortedByExclusive = Object.entries(components).sort(function (a, b) { return b[1].exclusive - a[1].exclusive; });
+    var sortedByScore = Object.entries(components).sort(function (a, b) { return b[1].score - a[1].score; });
+    var totalRenders = 0;
+    for (var i = 0; i < sortedByRenders.length; i++) { totalRenders += sortedByRenders[i][1].renders || 0; }
+
+    // Aggregate top rules across all components
+    var allRules = {};
+    var entries = Object.entries(components);
+    for (var i = 0; i < entries.length; i++) {
+      var stats = entries[i][1];
+      var rules = evaluateRules(stats, stats);
+      for (var j = 0; j < rules.length; j++) {
+        var key = rules[j].id;
+        if (!allRules[key]) allRules[key] = { id: key, name: rules[j].name, severity: rules[j].severity, count: 0, components: [] };
+        allRules[key].count++;
+        if (allRules[key].components.length < 5) allRules[key].components.push(entries[i][0]);
+      }
+    }
+    var topRules = Object.values(allRules).sort(function (a, b) { return b.count - a.count; }).slice(0, 8);
+
+    return React.createElement("div", { style: { overflow: "auto", height: "100%" } },
+      React.createElement("div", { style: { padding: "16px", display: "flex", flexDirection: "column", gap: "16px" } },
+        // Overview stats
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "12px" } },
+          React.createElement("div", { style: s.statCell },
+            React.createElement("div", { style: s.statLabel }, "Components"),
+            React.createElement("div", { style: s.statValue }, String(Object.keys(components).length))
+          ),
+          React.createElement("div", { style: s.statCell },
+            React.createElement("div", { style: s.statLabel }, "Commits"),
+            React.createElement("div", { style: s.statValue }, String(renderCount))
+          ),
+          React.createElement("div", { style: s.statCell },
+            React.createElement("div", { style: s.statLabel }, "Total Renders"),
+            React.createElement("div", { style: s.statValue }, String(totalRenders))
+          )
+        ),
+        // Top rules this session
+        topRules.length > 0
+          ? React.createElement("div", null,
+              React.createElement("h4", { style: s.sectionTitle },
+                React.createElement(Lightbulb, { size: 12 }),
+                " Top Rules This Session"
+              ),
+              React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: "4px", marginTop: "8px" } },
+                topRules.map(function (r, i) {
+                  return React.createElement("div", { key: r.id, style: { display: "flex", alignItems: "center", gap: "8px", padding: "6px 10px", background: "var(--bg-surface)", borderRadius: "6px", fontSize: "12px" } },
+                    React.createElement("span", { style: { color: "var(--text-muted)", width: "20px", textAlign: "right", fontSize: "11px" } }, String(i + 1)),
+                    React.createElement("span", { style: s.chip(r.severity) }, r.id),
+                    React.createElement("span", { style: { flex: 1 } }, r.name),
+                    React.createElement("span", { style: { color: "var(--text-muted)", fontSize: "11px" } }, String(r.count) + " component" + (r.count !== 1 ? "s" : ""))
+                  );
+                })
+              )
+            )
+          : null,
+        // Top components by score
+        React.createElement("div", null,
+          React.createElement("h4", { style: s.sectionTitle },
+            React.createElement(Flame, { size: 12 }),
+            " Top by Render Score"
+          ),
+          React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: "2px", marginTop: "8px" } },
+            sortedByScore.slice(0, 10).map(function (entry, i) {
+              var name = entry[0];
+              var s2 = entry[1];
+              var pct = maxScore > 0 ? (s2.score / maxScore) * 100 : 0;
+              return React.createElement("div", {
+                key: name, onClick: function () { setSelectedComponent(name); },
+                style: { display: "flex", alignItems: "center", gap: "8px", padding: "4px 10px", cursor: "pointer", borderRadius: "4px", fontSize: "12px" }
+              },
+                React.createElement("span", { style: { color: "var(--text-muted)", width: "20px", textAlign: "right", fontSize: "11px" } }, String(i + 1)),
+                React.createElement("div", { style: { flex: 1, height: "18px", background: "var(--bg-surface)", borderRadius: "3px", overflow: "hidden", display: "flex", alignItems: "center" } },
+                  React.createElement("div", { style: { width: Math.max(pct, 2) + "%", height: "100%", background: s2.score > 500 ? "var(--text-danger)" : s2.score > 200 ? "var(--text-warning)" : "var(--text-success)", borderRadius: "3px", display: "flex", alignItems: "center", paddingLeft: "4px" } },
+                    React.createElement("span", { style: { color: "#fff", fontSize: "10px", fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, name)
+                  )
+                ),
+                React.createElement("span", { style: { fontFamily: "'JetBrains Mono', monospace", fontSize: "11px", color: "var(--text-muted)", width: "40px", textAlign: "right" } }, String(s2.score))
+              );
+            })
+          )
+        )
+      )
+    );
+  }
+
   function renderDetailPanel() {
     if (!selectedData) {
       return React.createElement("div", { style: { padding: "24px", textAlign: "center", color: "var(--text-muted, #94a3b8)" } },
@@ -726,17 +845,43 @@ export default function App() {
               " Matched Rules (" + matchedRules.length + ")"
             ),
             matchedRules.map(function (r, i) {
-              return React.createElement("div", { key: i, style: s.insightCard(r.severity) },
+              var isExpanded = expandedRule === i;
+              var isPropRule = r.id === "unstable-function-prop" || r.id === "object-prop-instability" || r.id === "all-props-changing";
+              var isChainRule = r.id === "wasted-chain" || r.id === "partial-wasted-chain" || r.id === "deep-propagation" || r.id === "context-explosion" || r.id === "prop-cascade";
+              return React.createElement("div", { key: i, style: { cursor: "pointer", ...s.insightCard(r.severity) }, onClick: function () { setExpandedRule(isExpanded ? null : i); } },
                 React.createElement("div", { style: { fontWeight: 600, fontSize: "11px", marginBottom: "2px", display: "flex", alignItems: "center", gap: "4px", justifyContent: "space-between" } },
                   React.createElement("span", null, r.name),
                   React.createElement("span", { style: { fontSize: "9px", color: "var(--text-muted)", fontWeight: 400 } }, r.categoryName)
                 ),
                 React.createElement("div", { style: { fontSize: "11px", marginBottom: "4px" } }, r.message),
                 React.createElement("div", { style: s.insightSuggestion }, r.suggestion),
-                React.createElement("div", { style: { display: "flex", gap: "8px", fontSize: "10px", marginTop: "4px", color: "var(--text-muted)" } },
+                React.createElement("div", { style: { display: "flex", gap: "8px", fontSize: "10px", marginTop: "4px", color: "var(--text-muted)", alignItems: "center" } },
                   React.createElement("span", null, "Confidence: " + r.confidence + "%"),
-                  r.impact ? React.createElement("span", null, r.impact) : null
-                )
+                  r.impact ? React.createElement("span", null, r.impact) : null,
+                  r.docsRef ? React.createElement("a", { href: r.docsRef, target: "_blank", style: { marginLeft: "auto", color: "var(--text-accent)", textDecoration: "none", fontSize: "10px" }, onClick: function (e) { e.stopPropagation(); } }, "Docs \u2197") : null
+                ),
+                isExpanded && isPropRule && selectedData.propDiff && selectedData.propDiff.length > 0
+                  ? React.createElement("div", { style: { marginTop: "8px", padding: "6px", background: "var(--bg-app)", borderRadius: "4px", fontSize: "10px" } },
+                      React.createElement("div", { style: { fontWeight: 600, marginBottom: "4px", color: "var(--text-secondary)" } }, "Trigger Data"),
+                      selectedData.propDiff.slice(0, 5).map(function (d, j) {
+                        return React.createElement("div", { key: j, style: { display: "flex", justifyContent: "space-between", padding: "2px 0", borderBottom: "1px solid var(--border)" } },
+                          React.createElement("span", { style: { color: "var(--text-accent)", fontFamily: "'JetBrains Mono', monospace" } }, d.key),
+                          React.createElement("span", { style: { color: "var(--text-muted)" } }, d.type + (d.isFunctionRefChange ? " (fn ref)" : ""))
+                        );
+                      })
+                    )
+                  : null,
+                isExpanded && isChainRule && selectedData.causeChain && selectedData.causeChain.length > 0
+                  ? React.createElement("div", { style: { marginTop: "8px", padding: "6px", background: "var(--bg-app)", borderRadius: "4px", fontSize: "10px" } },
+                      React.createElement("div", { style: { fontWeight: 600, marginBottom: "4px", color: "var(--text-secondary)" } }, "Cause Chain"),
+                      selectedData.causeChain.map(function (link, j) {
+                        return React.createElement("div", { key: j, style: { display: "flex", justifyContent: "space-between", padding: "2px 0" } },
+                          React.createElement("span", null, link.name),
+                          React.createElement("span", { style: link.causeType !== "parent" ? { color: "var(--text-warning)" } : { color: "var(--text-muted)" } }, link.causeType)
+                        );
+                      })
+                    )
+                  : null
               );
             })
           )
@@ -817,6 +962,7 @@ export default function App() {
         [
           { id: "table", icon: Table2, label: "Table" },
           { id: "tree", icon: GitBranch, label: "Tree" },
+          { id: "session", icon: Activity, label: "Session" },
           { id: "flamegraph", icon: BarChart3, label: "Flame" },
           { id: "timeline", icon: Clock, label: "Timeline" },
         ].map(function (v) {
@@ -891,6 +1037,7 @@ export default function App() {
             )
           : viewMode === "table" ? renderTableView()
           : viewMode === "tree" ? renderTreeView()
+          : viewMode === "session" ? renderSessionView()
           : viewMode === "flamegraph" ? renderFlamegraphView()
           : viewMode === "timeline" ? renderTimelineView()
           : null

@@ -17,14 +17,14 @@ var RULES = [
   // CATEGORY: MEMOIZATION
   // ═══════════════════════════════════════════════════════════════
 
-  // R1: Wasted render chain — all parent causes
+  // R1: Wasted render chain — all parent causes (min 3-level chain for critical)
   {
     id: "wasted-chain",
     category: "memoization",
     name: "Wasted Render Chain",
     severity: "critical",
     condition: function (data) {
-      if (!data.causeChain || data.causeChain.length < 2) return false;
+      if (!data.causeChain || data.causeChain.length < 3) return false;
       for (var i = 0; i < data.causeChain.length; i++) {
         if (data.causeChain[i].causeType !== "parent") return false;
       }
@@ -122,7 +122,7 @@ var RULES = [
       if (!data.propDiff || data.propDiff.length === 0) return false;
       for (var i = 0; i < data.propDiff.length; i++) {
         var d = data.propDiff[i];
-        if (d.type === "object" && !d.isNew && !d.isRemoved) return true;
+        if ((d.type === "object" || d.isArrayChange) && !d.isNew && !d.isRemoved) return true;
       }
       return false;
     },
@@ -130,7 +130,7 @@ var RULES = [
       var objs = [];
       for (var i = 0; i < data.propDiff.length; i++) {
         var d = data.propDiff[i];
-        if (d.type === "object" && !d.isNew && !d.isRemoved) objs.push(d.key);
+        if ((d.type === "object" || d.isArrayChange) && !d.isNew && !d.isRemoved) objs.push(d.key);
       }
       return objs.join(", ") + " recreated every render";
     },
@@ -138,7 +138,7 @@ var RULES = [
       var objs = [];
       for (var i = 0; i < data.propDiff.length; i++) {
         var d = data.propDiff[i];
-        if (d.type === "object" && !d.isNew && !d.isRemoved) objs.push(d.key);
+        if ((d.type === "object" || d.isArrayChange) && !d.isNew && !d.isRemoved) objs.push(d.key);
       }
       return "Wrap " + objs.join(", ") + " in useMemo()";
     },
@@ -156,7 +156,7 @@ var RULES = [
     name: "All Props Changing Every Render",
     severity: "high",
     condition: function (data) {
-      return data.allPropsChanged === true && (data.totalPropCount || 0) >= 3;
+      return data.allPropsChanged === true && (data.totalPropCount || 0) >= 5;
     },
     message: function (data) {
       return (data.changedPropCount || 0) + "/" + (data.totalPropCount || 0) + " props changed — suspect spread { ...props }";
@@ -352,7 +352,7 @@ var RULES = [
     docsRef: "https://react.dev/reference/react/memo",
   },
 
-  // R12: High render count component
+  // R12: High cumulative render count — per-commit snapshot preferred
   {
     id: "high-render-count",
     category: "performance",
@@ -360,10 +360,10 @@ var RULES = [
     severity: "medium",
     condition: function (data, stats) {
       if (!stats) return false;
-      return stats.renders > 20;
+      return stats.renders > 50;
     },
     message: function (data, stats) {
-      return "Rendered " + stats.renders + " times";
+      return "Rendered " + stats.renders + " times this session";
     },
     suggestion: function () {
       return "Investigate why this component renders so frequently. Consider shouldComponentUpdate or React.memo";
@@ -375,7 +375,7 @@ var RULES = [
     docsRef: "https://react.dev/reference/react/memo",
   },
 
-  // R13: High exclusive count component
+  // R13: High exclusive count — per-commit, not cumulative
   {
     id: "high-exclusive-count",
     category: "performance",
@@ -383,7 +383,7 @@ var RULES = [
     severity: "medium",
     condition: function (data, stats) {
       if (!stats) return false;
-      return stats.exclusive > 50;
+      return stats.exclusive > 100;
     },
     message: function (data, stats) {
       return "Exclusive renders: " + stats.exclusive + " (excludes children)";
@@ -405,7 +405,7 @@ var RULES = [
     name: "Large Subtree Re-Rendered",
     severity: "medium",
     condition: function (data) {
-      return data.total > 20;
+      return data.total > 50;
     },
     message: function (data) {
       return "Commit re-rendered " + data.total + " components (including descendants)";
@@ -451,7 +451,7 @@ var RULES = [
     impact: function () {
       return "Stable keys prevent unnecessary DOM remounting and state loss";
     },
-    confidence: 40,
+    confidence: 25,
     docsRef: "https://react.dev/learn/rendering-lists#keeping-list-items-in-order-with-key",
   },
 
@@ -466,9 +466,9 @@ var RULES = [
     name: "Re-Renders Without Visible Work",
     severity: "medium",
     condition: function (data, stats) {
-      if (!stats || stats.renders < 5) return false;
+      if (!stats || stats.renders < 10) return false;
       var ratio = stats.exclusive / Math.max(stats.renders, 1);
-      return ratio < 1 && data.causeChain && data.causeChain.length > 0;
+      return ratio < 0.3 && data.causeChain && data.causeChain.length > 0;
     },
     message: function (data, stats) {
       return String(stats.renders) + " renders but only " + stats.exclusive + " exclusive work done";
