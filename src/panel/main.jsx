@@ -1,18 +1,22 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import ErrorBoundary from "./ErrorBoundary";
 
-// Create a promise that resolves when the port arrives
-let portResolve;
-const portPromise = new Promise((resolve) => {
+var portResolve;
+var portResolved = false;
+var portPromise = new Promise(function (resolve) {
   portResolve = resolve;
 });
 
-// This gets called by devtools.js
-window.initPort = (port) => {
+window.initPort = function (port) {
+  if (portResolved) return;
+  portResolved = true;
   portResolve(port);
 };
 
 window.portPromise = portPromise;
 
-createRoot(document.getElementById("root")).render(<App />);
+createRoot(document.getElementById("root")).render(
+  React.createElement(ErrorBoundary, null, React.createElement(App))
+);

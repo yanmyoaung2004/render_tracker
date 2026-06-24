@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-06-24T14:30:00.000Z",
+  "title": "Design System: React Render Tracker",
+  "extensions": {
+    "colorMeta": {
+      "accent": { "role": "primary", "displayName": "Sky Accent", "canonical": "oklch(78% 0.14 230)", "tonalRamp": ["#0c4a6e", "#0369a1", "#0ea5e9", "#38bdf8", "#7dd3fc", "#bae6fd", "#e0f2fe", "#f0f9ff"] },
+      "canvas": { "role": "neutral", "displayName": "Canvas", "canonical": "oklch(21% 0.04 260)", "tonalRamp": ["#020617", "#0f172a", "#1e293b", "#334155", "#475569", "#64748b", "#94a3b8", "#cbd5e1"] },
+      "surface": { "role": "neutral", "displayName": "Surface", "canonical": "oklch(27% 0.03 260)", "tonalRamp": ["#0f172a", "#1e293b", "#334155", "#475569", "#64748b", "#94a3b8", "#cbd5e1", "#e2e8f0"] },
+      "border": { "role": "neutral", "displayName": "Border", "canonical": "oklch(32% 0.02 260)", "tonalRamp": ["#1e293b", "#334155", "#475569", "#64748b", "#94a3b8", "#cbd5e1", "#e2e8f0", "#f1f5f9"] },
+      "ink": { "role": "neutral", "displayName": "Ink", "canonical": "oklch(93% 0.01 260)", "tonalRamp": ["#64748b", "#94a3b8", "#cbd5e1", "#e2e8f0", "#f1f5f9", "#f8fafc", "#fcfcfd", "#ffffff"] },
+      "danger": { "role": "semantic", "displayName": "Danger", "canonical": "oklch(70% 0.16 30)", "tonalRamp": ["#7f1d1d", "#991b1b", "#b91c1c", "#dc2626", "#ef4444", "#f87171", "#fca5a5", "#fecaca"] },
+      "warning": { "role": "semantic", "displayName": "Warning", "canonical": "oklch(78% 0.16 85)", "tonalRamp": ["#78350f", "#92400e", "#b45309", "#d97706", "#f59e0b", "#fbbf24", "#fcd34d", "#fde68a"] },
+      "success": { "role": "semantic", "displayName": "Success", "canonical": "oklch(72% 0.18 145)", "tonalRamp": ["#064e3b", "#065f46", "#047857", "#059669", "#22c55e", "#4ade80", "#86efac", "#bbf7d0"] }
+    },
+    "typographyMeta": {
+      "body": { "displayName": "Body", "purpose": "All primary content — table cells, sidebar detail text, insight messages." },
+      "label": { "displayName": "Label", "purpose": "Column headers, stat labels, section titles. Uppercase, tight tracking." },
+      "mono": { "displayName": "Mono", "purpose": "Component names in tables, render counts, scores, prop values." },
+      "heading": { "displayName": "Heading", "purpose": "Section titles in the toolbar and sidebar." }
+    },
+    "shadows": [],
+    "motion": [
+      { "name": "duration-instant", "value": "0ms", "purpose": "Default for all state transitions. No delay on hover/focus/selected." },
+      { "name": "duration-subtle", "value": "100ms", "purpose": "Resize handle hover, opacity transitions on flamegraph bars." },
+      { "name": "ease-standard", "value": "ease", "purpose": "Only used when a transition is unavoidable (resize handle color fade)." }
+    ],
+    "breakpoints": [
+      { "name": "sidebar-min", "value": "350px", "purpose": "Minimum sidebar width via drag handle." },
+      { "name": "sidebar-max", "value": "800px", "purpose": "Maximum sidebar width via drag handle." }
+    ]
+  },
+  "components": [
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "Red-filled reset button with dropdown for partial resets (timeline, insights).",
+      "html": "<button class=\"ds-btn-danger\">\n  <svg width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M3 6h18\"/><path d=\"M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6\"/><path d=\"M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2\"/></svg>\n  Clear all\n</button>",
+      "css": ".ds-btn-danger { display: inline-flex; align-items: center; gap: 3px; padding: 3px 8px; background: #f87171; color: #fff; border: none; border-radius: 3px; font: 600 12px/1.4 Inter, sans-serif; cursor: pointer; } .ds-btn-danger:hover { background: #ef4444; } .ds-btn-danger:focus-visible { outline: 2px solid #38bdf8; outline-offset: 2px; }"
+    },
+    {
+      "name": "Tab Button",
+      "kind": "button",
+      "refersTo": "tab-button",
+      "description": "View mode selector — Table, Tree, Flame, Timeline. Active state uses selected bg + accent text.",
+      "html": "<button class=\"ds-tab ds-tab-active\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><rect x=\"3\" y=\"3\" width=\"7\" height=\"7\"/><rect x=\"14\" y=\"3\" width=\"7\" height=\"7\"/><rect x=\"3\" y=\"14\" width=\"7\" height=\"7\"/><rect x=\"14\" y=\"14\" width=\"7\" height=\"7\"/></svg> Table</button>\n<button class=\"ds-tab\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M5 3h14\"/><path d=\"M5 9h14\"/><path d=\"M5 15h14\"/><path d=\"M5 21h14\"/></svg> Tree</button>",
+      "css": ".ds-tab { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; background: transparent; color: #94a3b8; border: none; border-radius: 3px; font: 400 11px/1.4 Inter, sans-serif; cursor: pointer; transition: all 0.1s; } .ds-tab:hover { background: #334155; } .ds-tab-active { background: #1e3a5f; color: #38bdf8; font-weight: 600; } .ds-tab:focus-visible { outline: 2px solid #38bdf8; outline-offset: 2px; }"
+    },
+    {
+      "name": "Severity Chip",
+      "kind": "chip",
+      "refersTo": "chip-critical",
+      "description": "Inline severity tag — critical (red), high (amber), low (yellow-green).",
+      "html": "<span class=\"ds-chip ds-chip-critical\">wasted-chain</span>\n<span class=\"ds-chip ds-chip-high\">context-explosion</span>\n<span class=\"ds-chip ds-chip-low\">parent</span>",
+      "css": ".ds-chip { display: inline-block; padding: 1px 5px; border-radius: 2px; font: 500 10px/1.4 Inter, sans-serif; } .ds-chip-critical { background: #450a0a; color: #f87171; } .ds-chip-high { background: #fed7aa; color: #92400e; } .ds-chip-low { background: #fef3c7; color: #065f46; }"
+    },
+    {
+      "name": "Search Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Compact search field for filtering components by name.",
+      "html": "<div style=\"position:relative\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#64748b\" stroke-width=\"2\" style=\"position:absolute;left:6px;top:50%;transform:translateY(-50%)\"><circle cx=\"11\" cy=\"11\" r=\"8\"/><path d=\"m21 21-4.35-4.35\"/></svg><input class=\"ds-input\" placeholder=\"Search...\" style=\"padding-left:22px\"></div>",
+      "css": ".ds-input { padding: 3px 6px; border: 1px solid #334155; border-radius: 3px; font: 400 12px/1.5 Inter, sans-serif; background: #1e293b; color: #f1f5f9; outline: none; width: 140px; } .ds-input::placeholder { color: #64748b; } .ds-input:focus { border-color: #38bdf8; }"
+    },
+    {
+      "name": "Table Row",
+      "kind": "custom",
+      "refersTo": "table-header",
+      "description": "Sortable data table row with heatmap cells for render count and exclusive count.",
+      "html": "<table style=\"width:100%;border-collapse:collapse\"><thead><tr><th class=\"ds-th\">Component</th><th class=\"ds-th\" style=\"text-align:right\">Score</th><th class=\"ds-th\" style=\"text-align:right\">Renders</th><th class=\"ds-th\" style=\"text-align:right\">Exclusive</th></tr></thead><tbody><tr class=\"ds-tr\" tabindex=\"0\"><td class=\"ds-td\" style=\"font-family:'JetBrains Mono',monospace;font-weight:500\">UserCard</td><td class=\"ds-td\" style=\"text-align:center\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#fbbf24\" stroke-width=\"2\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><line x1=\"12\" y1=\"8\" x2=\"12\" y2=\"12\"/><line x1=\"12\" y1=\"16\" x2=\"12.01\" y2=\"16\"/></svg></td><td class=\"ds-td\" style=\"text-align:right;background:#78350f;color:#fbbf24;font-weight:500;font-family:'JetBrains Mono',monospace\">42</td><td class=\"ds-td\" style=\"text-align:right;background:#78350f;color:#fbbf24;font-weight:600;font-family:'JetBrains Mono',monospace\">38</td></tr><tr class=\"ds-tr ds-tr-selected\" tabindex=\"0\"><td class=\"ds-td\" style=\"font-family:'JetBrains Mono',monospace;font-weight:500;color:#93c5fd\">App</td><td class=\"ds-td\" style=\"text-align:center\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#4ade80\" stroke-width=\"2\"><line x1=\"5\" y1=\"12\" x2=\"19\" y2=\"12\"/></svg></td><td class=\"ds-td\" style=\"text-align:right;background:#064e3b;color:#4ade80;font-weight:500;font-family:'JetBrains Mono',monospace\">3</td><td class=\"ds-td\" style=\"text-align:right;background:#064e3b;color:#4ade80;font-weight:600;font-family:'JetBrains Mono',monospace\">1</td></tr></tbody></table>",
+      "css": ".ds-th { padding: 6px 10px; text-align: left; font: 600 10px/1.4 Inter, sans-serif; color: #94a3b8; border-bottom: 1px solid #334155; background: #0f172a; position: sticky; top: 0; text-transform: uppercase; letter-spacing: 0.5px; } .ds-tr { border-bottom: 1px solid #334155; cursor: pointer; background: transparent; } .ds-tr:hover { background: #334155; } .ds-tr-selected { background: #1e3a5f; } .ds-td { padding: 5px 10px; font-size: 12px; }"
+    },
+    {
+      "name": "Live Feed Item",
+      "kind": "custom",
+      "refersTo": "live-feed-item",
+      "description": "Collapsible live update feed — shows recent render events with severity-colored left border.",
+      "html": "<div class=\"ds-live-item\" style=\"border-left-color:#f87171\"><div style=\"display:flex;justify-content:space-between;align-items:center\"><span style=\"font-weight:600;font-size:11px;font-family:'JetBrains Mono',monospace\">UserCard</span><span style=\"font-size:10px;color:#64748b\">2:41:15 PM</span></div><div style=\"display:flex;gap:8px;font-size:10px;margin-top:2px\"><span>Score: 342</span><span>Ex: 28</span></div></div>",
+      "css": ".ds-live-item { padding: 5px 8px; margin-bottom: 3px; border-radius: 4px; font-size: 11px; cursor: pointer; border-left: 3px solid; background: transparent; } .ds-live-item:hover { background: #334155; }"
+    },
+    {
+      "name": "Insight Card",
+      "kind": "card",
+      "refersTo": "insight-card",
+      "description": "Performance insight card in the detail panel — shows pattern type, recommendation, and impact.",
+      "html": "<div class=\"ds-insight ds-insight-critical\"><div style=\"font-weight:600;font-size:11px;margin-bottom:2px;text-transform:capitalize\">Wasted Chain</div><div style=\"font-size:11px;margin-bottom:4px\">Memoize UserCard with React.memo()</div><div class=\"ds-insight-suggestion\">Would eliminate 100% of this cascade</div></div>",
+      "css": ".ds-insight { padding: 8px 10px; border-radius: 4px; font-size: 11px; margin-bottom: 6px; border-left: 3px solid; } .ds-insight-critical { background: #450a0a; border-color: #f87171; } .ds-insight-high { background: #422006; border-color: #fbbf24; } .ds-insight-low { background: #1e293b; border-color: #4ade80; } .ds-insight-suggestion { font-size: 11px; color: #6ee7b7; background: #064e3b; padding: 3px 6px; border-radius: 3px; margin-top: 4px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Debug Console",
+    "overview": "The Debug Console is a developer's instrument panel — compact, precise, and ruthlessly functional. Every pixel earns its place by delivering signal, not decoration. This is a tool for engineers who already know what they're looking at; they need answers, not explanations of what the UI means.\n\nThe system sits inside Chrome DevTools, so it borrows DevTools' visual grammar: dense information density, flat surfaces with tonal layering for hierarchy, minimal chrome, and a default dark theme that matches the DevTools environment. The panel should feel like it was built by the Chrome DevTools team — not like a web app embedded in an iframe.\n\nWhat this system explicitly rejects: gradient text, glassmorphism, decorative stats with big numbers, card grids with icons, numbered section markers, side-stripe borders, and any animation that delays access to data. The developer's attention is the resource we're protecting.",
+    "keyCharacteristics": [
+      "Compact and dense: 10–12px body text, 4–8px padding, tight row spacing",
+      "Precision instruments over marketing cards: every interactive element is clickable, selectable, and keyboard-navigable",
+      "Flat by default: depth through tonal layering (background → surface → hover → selected), not shadows",
+      "Dark-first: the panel is dark by default to match Chrome DevTools; light mode is a companion",
+      "Monospace where it matters: component names, render counts, and scores use JetBrains Mono for scannability"
+    ],
+    "rules": [
+      { "name": "The One Accent Rule", "body": "The sky accent is used on ≤5% of any given screen. It appears on the active tab, the selected component name, and the resize handle on hover. If the accent appears more than three places at once, it's too much.", "section": "colors" },
+      { "name": "The Tonal Depth Rule", "body": "Depth is conveyed by stepping up one surface level, not by adding shadows. Canvas → Surface → Hover → Selected is the full depth scale. No box-shadow on any surface.", "section": "colors" },
+      { "name": "The Mono Rule", "body": "JetBrains Mono is reserved for data that changes: component names, render counts, scores, timestamps, prop values. Static labels (column headers, section titles) use Inter. If it's a number or a component name, it's Mono.", "section": "typography" },
+      { "name": "The Flat-By-Default Rule", "body": "Surfaces are flat at rest and flat in interaction. The only visual depth cue is the hover background shift (Canvas → Hover for table rows, Surface → Hover for sidebar items). No shadows, no lifted states.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do use the accent color (#38bdf8) on exactly one element per view — the active tab.",
+      "Do use JetBrains Mono for all component names, render counts, scores, and prop values.",
+      "Do keep table rows at 5px vertical padding — anything more wastes vertical space in a DevTools panel.",
+      "Do make every row clickable. Clicking a component in any view selects it and shows details in the sidebar.",
+      "Do respect prefers-reduced-motion: instant transitions, no auto-play, no entrance animations.",
+      "Do use tonal layering (Canvas → Surface → Hover → Selected) instead of shadows for depth."
+    ],
+    "donts": [
+      "Don't use gradient text, glassmorphism, or decorative backdrop-filter blur.",
+      "Don't add shadows to any surface — no box-shadow on cards, dropdowns, or the sidebar.",
+      "Don't use side-stripe borders (colored border-left greater than 1px as an accent). Use full background tints or left-bordered cards (3px max, only on insight cards and live feed items).",
+      "Don't show big decorative numbers or hero metrics. Render count, score, and exclusive count are functional data shown inline.",
+      "Don't use numbered section markers (01 / 02 / 03) or tiny uppercase eyebrows above every section.",
+      "Don't add card grids with icon + heading + text patterns. Tables and lists carry more information per pixel.",
+      "Don't animate layout properties. State transitions (hover, selected) should be instant or use a 100–150ms opacity/color transition only.",
+      "Don't clip absolute-positioned dropdowns — use position: fixed or the native popover API to escape the stacking context."
+    ]
+  }
+}

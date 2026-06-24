@@ -1,69 +1,119 @@
-const connections = {};
+var connections = {};
+var latestData = null;
+var hasSessionStorage = !!(chrome.storage && chrome.storage.session);
+var CONTENT_SCRIPT_ID = "react-render-tracker-bridge";
 
-function isPlainObject(v) {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
+// ── Script injection ─────────────────────────────────────────────
+async function setupContentScript() {
+  try {
+    var existing = await chrome.scripting.getRegisteredContentScripts();
+    var hasBridge = existing.some(function (s) { return s.id === CONTENT_SCRIPT_ID; });
+    if (hasBridge) return;
+    await chrome.scripting.registerContentScripts([{
+      id: CONTENT_SCRIPT_ID,
+      js: ["content.js"],
+      matches: ["<all_urls>"],
+      runAt: "document_start",
+      world: "ISOLATED",
+    }]);
+  } catch (e) { /* registration may already exist */ }
 }
 
-function isValidRenderPayload(payload) {
-  if (!isPlainObject(payload)) return false;
-  if (!Array.isArray(payload.currentCommitUpdates)) return false;
+async function injectIntoMainWorld(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      files: ["injected.js"],
+      world: "MAIN",
+    });
+  } catch (e) { /* tab may not be ready */ }
+}
+
+function injectAllTabs() {
+  chrome.tabs.query({ url: ["http://*/*", "https://*/*"] }).then(function (tabs) {
+    for (var i = 0; i < tabs.length; i++) {
+      injectIntoMainWorld(tabs[i].id);
+    }
+  }).catch(function () {});
+}
+
+chrome.runtime.onInstalled.addListener(function () {
+  setupContentScript();
+  injectAllTabs();
+});
+
+chrome.tabs.onUpdated.addListener(function (tabId, changeInfo, tab) {
+  if (changeInfo.status === "loading" && tab.url && tab.url.indexOf("http") === 0) {
+    injectIntoMainWorld(tabId);
+  }
+});
+
+injectAllTabs();
+
+function updateLatestData(data) {
+  latestData = data;
+  if (!hasSessionStorage) return;
+  try {
+    chrome.storage.session.set({ latestRenderData: data }).catch(function () {});
+  } catch (e) {}
+}
+
+function isValidPayload(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  if (!Array.isArray(value.currentCommitUpdates)) return false;
   return true;
 }
 
-chrome.runtime.onConnect.addListener((port) => {
+function forwardToPort(tabId, payload, commitId) {
+  var port = connections[tabId];
+  if (!port) return;
+  try {
+    port.postMessage({ type: "FOR_DEVTOOLS", payload: payload, commitId: commitId });
+  } catch (e) {}
+}
+
+chrome.runtime.onConnect.addListener(function (port) {
   if (port.name !== "devtools-panel") return;
-
-  const devToolsListener = (message) => {
+  port.onMessage.addListener(function (message) {
     if (!message || typeof message !== "object") return;
-    if (message.type === "INIT") {
-      const tabId = message.tabId;
-      if (typeof tabId !== "number") return;
-      connections[tabId] = port;
-      return;
+    if (message.type !== "INIT") return;
+    if (typeof message.tabId !== "number") return;
+    connections[message.tabId] = port;
+    if (latestData) {
+      try {
+        port.postMessage({ type: "FOR_DEVTOOLS", payload: latestData.payload, commitId: latestData.commitId });
+      } catch (e) {}
     }
-  };
-
-  port.onMessage.addListener(devToolsListener);
-
-  port.onDisconnect.addListener(() => {
-    const tabs = Object.keys(connections);
-    for (const tabId of tabs) {
-      if (connections[tabId] === port) {
-        delete connections[tabId];
+  });
+  port.onDisconnect.addListener(function () {
+    var tabIds = Object.keys(connections);
+    for (var i = 0; i < tabIds.length; i++) {
+      if (connections[tabIds[i]] === port) {
+        delete connections[tabIds[i]];
         break;
       }
     }
   });
 });
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   try {
-    if (!message || message.type !== "RENDER_DATA") {
-      return false;
-    }
-    if (!sender.tab?.id) {
-      return false;
-    }
-    if (!isValidRenderPayload(message.payload)) {
-      console.warn("[Background] Dropped RENDER_DATA: invalid payload");
-      return false;
-    }
-
-    const tabId = sender.tab.id;
-    const port = connections[tabId];
-    if (port) {
-      try {
-        port.postMessage({
-          type: "FOR_DEVTOOLS",
-          payload: message.payload,
-          commitId: message.commitId,
-        });
-      } catch (e) {
-        console.warn("[Background] postMessage to devtools failed:", e);
-      }
-    }
+    if (!message || message.type !== "RENDER_DATA") { sendResponse({}); return true; }
+    if (!sender.tab || typeof sender.tab.id !== "number") { sendResponse({}); return true; }
+    if (!isValidPayload(message.payload)) { sendResponse({}); return true; }
+    updateLatestData({ payload: message.payload, commitId: message.commitId, timestamp: Date.now() });
+    forwardToPort(sender.tab.id, message.payload, message.commitId);
+    sendResponse({});
   } catch (e) {
-    console.error("[Background] onMessage error:", e);
+    sendResponse({});
   }
-  return false;
+  return true;
 });
+
+if (hasSessionStorage) {
+  chrome.storage.session.get("latestRenderData").then(function (result) {
+    if (result.latestRenderData) latestData = result.latestRenderData;
+  }).catch(function () {});
+}
+
+

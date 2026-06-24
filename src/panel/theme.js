@@ -1,0 +1,82 @@
+export var themes = {
+  light: {
+    name: "light",
+    bg: {
+      app: "#f0f0f7",
+      surface: "#ffffff",
+      header: "#f0f0f7",
+      sidebar: "#ffffff",
+      hover: "#eaeaef",
+      selected: "#eef2ff",
+      insight: "#fafafa",
+      insightCritical: "#fef2f2",
+      treeRender: "#f0f0f5",
+      treeSkip: "#fafafa",
+      card: "#ffffff",
+    },
+    text: {
+      primary: "#1a1a2e",
+      secondary: "#52526b",
+      muted: "#6b6b80",
+      accent: "#6366f1",
+      danger: "#dc2626",
+      warning: "#d97706",
+      success: "#16a34a",
+      onDanger: "#ffffff",
+    },
+    border: "#d8d8e6",
+    accent: "#6366f1",
+    heatmap: ["#eef2ff", "#e0e7ff", "#fef3c7", "#fed7aa", "#fecaca"],
+  },
+  dark: {
+    name: "dark",
+    bg: {
+      app: "#0d0d12",
+      surface: "#16161e",
+      header: "#0d0d12",
+      sidebar: "#16161e",
+      hover: "#1e1e28",
+      selected: "#1e1e3a",
+      insight: "#1e1e28",
+      insightCritical: "#2d0a0a",
+      treeRender: "#1e1e28",
+      treeSkip: "#16161e",
+      card: "#16161e",
+    },
+    text: {
+      primary: "#e8e8f0",
+      secondary: "#9494ad",
+      muted: "#6b6b7d",
+      accent: "#818cf8",
+      danger: "#f87171",
+      warning: "#fbbf24",
+      success: "#4ade80",
+      onDanger: "#ffffff",
+    },
+    border: "#282833",
+    accent: "#818cf8",
+    heatmap: ["#0d1117", "#161b22", "#1a1e2e", "#2d1b1b", "#3d1111"],
+  },
+};
+
+export var spacing = {
+  xs: "4px",
+  sm: "8px",
+  md: "12px",
+  lg: "16px",
+  xl: "24px",
+  xxl: "40px",
+};
+
+export var typography = {
+  mono: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
+  sans: "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  size: {
+    xs: "10px",
+    sm: "11px",
+    base: "12px",
+    lg: "13px",
+    xl: "14px",
+    heading: "16px",
+  },
+};

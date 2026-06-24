@@ -1,228 +1,198 @@
 (function () {
-  /** React reconcile flag: Update (React 17–19). May need adjustment for future majors. */
-  const REACT_FLAG_UPDATE = 4;
-  const MAX_TIMELINE_ENTRIES = 80;
-  const MAX_PAYLOAD_CHARS = 1_500_000;
-  const HOOK_WAIT_MAX_ATTEMPTS = 200;
-  const HOOK_POLL_MS = 50;
+  // ── Configuration ────────────────────────────────────────────────
+  var REACT_FLAG_UPDATE = 4;
+  var MAX_TIMELINE_ENTRIES = 80;
+  var MAX_PAYLOAD_CHARS = 4000000;
+  var HOOK_MAX_ATTEMPTS = 200;
+  var HOOK_POLL_MS = 50;
+  var TIMELINE_SEND_COUNT = 50;
+  var OVERFLOW_TRIM_TIMELINE = 25;
+  var OVERFLOW_TRIM_UPDATES = 120;
+  var STATS_MAX_ENTRIES = 200;
+  var PROP_DIFF_DEPTH = 2;
+  var PROP_DIFF_ARRAY_LIMIT = 3;
+  var PROP_DIFF_OBJ_LIMIT = 3;
+  var PROP_STRING_LIMIT = 50;
 
-  const fiberRenderStore = new WeakMap();
-  const globalStats = new Map();
-  let currentCommitUpdates = [];
-  const renderTimeline = [];
-  const commitMap = new WeakMap();
-  let commitCounter = 0;
+  // ── State ────────────────────────────────────────────────────────
+  var fiberRenderStore = new WeakMap();
+  var globalStats = new Map();
+  var currentCommitUpdates = [];
+  var renderTimeline = [];
+  var commitMap = new WeakMap();
+  var commitCounter = 0;
 
-  // =============================
-  // COMPONENT NAME
-  // =============================
-  function getComponentCacheName(fiber) {
-    if (fiber._debugName) return fiber._debugName;
-    if (fiber._debugOwner && fiber._debugOwner.type) {
-      const ownerType = fiber._debugOwner.type;
-      return ownerType.displayName || ownerType.name || "Unknown_Owner";
-    }
-    const type = fiber.type;
-    if (!type) return "Anonymous";
-    const actualType = type.type || type;
-
-    return actualType.displayName || actualType.name || "Anonymous";
-  }
+  // ── Fiber introspection ──────────────────────────────────────────
   function getComponentName(fiber) {
-    const { type, elementType } = fiber;
+    var type = fiber.type;
     if (typeof type === "string") return null;
-
-    let name =
-      type?.name ||
-      type?.displayName ||
-      elementType?.displayName ||
-      elementType?.name;
-
-    if (!name && type?.render) {
+    var name = type && (type.name || type.displayName);
+    if (!name && fiber.elementType) {
+      name = fiber.elementType.displayName || fiber.elementType.name;
+    }
+    if (!name && type && type.render) {
       name = type.render.displayName || type.render.name;
     }
-
     return name || null;
   }
 
-  // =============================
-  // USER COMPONENT FILTER
-  // =============================
-  // function isUserComponent(fiber) {
-  //   console.log(fiber);
-  //   if (!fiber || !fiber.type) return false;
-  //   if (typeof fiber.type === "string") return false;
-  //   return true;
-  //   //   const source = fiber._debugSource;
-  //   //   const fileName = source?.fileName || "";
-  //   //   return fileName.includes("src/") || fileName.includes("src\\");
-  // }
+  var INTERNAL_TAGS = [3, 7, 9, 10, 11, 13, 19, 22];
+  var LIBRARY_PATTERNS = ["node_modules", "webpack", "vite", ".next", ".vercel"];
+
+  function isLibraryFile(fileName) {
+    if (!fileName) return false;
+    for (var i = 0; i < LIBRARY_PATTERNS.length; i++) {
+      if (fileName.indexOf(LIBRARY_PATTERNS[i]) !== -1) return true;
+    }
+    return false;
+  }
+
   function isUserComponent(fiber) {
     if (!fiber || !fiber.type) return false;
+    if (typeof fiber.type === "string") return false;
+    if (INTERNAL_TAGS.indexOf(fiber.tag) !== -1) return false;
 
-    const { type, tag } = fiber;
+    var source = fiber._debugSource;
+    if (source && source.fileName) {
+      return !isLibraryFile(source.fileName);
+    }
 
-    // 1. Exclude DOM/native elements (<div>, <span>, etc.)
-    if (typeof type === "string") return false;
-
-    // 2. Exclude React internal types (fragments, suspense, etc.)
-    const REACT_INTERNAL_TAGS = new Set([
-      3, // HostRoot
-      7, // Fragment
-      9, // ContextConsumer
-      10, // ContextProvider
-      11, // ForwardRef (optional: include if you want)
-      13, // Suspense
-      19, // SuspenseList
-      22, // Offscreen
-    ]);
-
-    if (REACT_INTERNAL_TAGS.has(tag)) return false;
-
-    // 3. Try to get component name
-    const name =
-      type?.displayName ||
-      type?.name ||
-      fiber.elementType?.displayName ||
-      fiber.elementType?.name;
-
+    var name = getComponentName(fiber);
     if (!name) return false;
-
-    // 4. Filter obvious library / internal noise
-    const isLikelyLibrary =
-      name.startsWith("Styled") || // styled-components
-      name.startsWith("Mui") || // MUI
-      name.startsWith("ForwardRef") ||
-      name.startsWith("Memo") ||
-      name.includes("Provider") ||
-      name.includes("Consumer");
-
-    if (isLikelyLibrary) return false;
-
-    // 5. Heuristic: user components are capitalized
-
-    const isCapitalized = name[0] === name[0].toUpperCase();
-
-    return isCapitalized;
+    var c = name.charCodeAt(0);
+    return c >= 65 && c <= 90;
   }
 
-  /** Nested user component under another user component — subtree boundary for exclusive counts. */
-  function isExclusiveSubtreeBoundary(fiber) {
-    if (!fiber?.type || typeof fiber.type === "string" || !fiber.alternate)
-      return false;
-    if (!isUserComponent(fiber)) return false;
-    const owner = fiber._debugOwner;
-    return !!(owner && isUserComponent(owner));
-  }
+  var TRACKABLE_TAGS = [0, 1, 11, 14, 15];
 
-  /** User component fibers we record on each commit (function/class/memo/forwardRef). */
   function isTrackableRenderFiber(fiber) {
-    if (!fiber?.alternate) return false;
-    if (![0, 1, 11, 14, 15].includes(fiber.tag)) return false;
+    if (!fiber || !fiber.alternate) return false;
+    if (TRACKABLE_TAGS.indexOf(fiber.tag) === -1) return false;
     return isUserComponent(fiber);
   }
 
-  // =============================
-  // PROP DIFF
-  // =============================
-  function getDetailedPropDiff(prev = {}, next = {}) {
-    const changes = [];
-    const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
-
-    keys.forEach((key) => {
-      const prevVal = prev[key];
-      const nextVal = next[key];
-
-      if (prevVal !== nextVal) {
-        let changeType = "value";
-        if (typeof nextVal === "function") changeType = "function";
-        if (typeof nextVal === "object" && nextVal !== null)
-          changeType = "object";
-
-        const isFunctionRefChange =
-          typeof prevVal === "function" &&
-          typeof nextVal === "function" &&
-          prevVal !== nextVal;
-
-        changes.push({
-          key,
-          type: changeType,
-          isNew: !(key in prev),
-          isRemoved: !(key in next),
-          isFunctionRefChange,
-          prevValue: serializeForDiff(prevVal),
-          nextValue: serializeForDiff(nextVal),
-        });
-      }
-    });
-
-    return changes;
+  function isSubtreeBoundary(fiber) {
+    if (!fiber || !fiber.type || typeof fiber.type === "string" || !fiber.alternate) return false;
+    if (!isUserComponent(fiber)) return false;
+    var owner = fiber._debugOwner;
+    return !!(owner && isUserComponent(owner));
   }
 
-  function serializeForDiff(val) {
+  // ── Prop diff ────────────────────────────────────────────────────
+  function serializeValue(val, depth) {
+    if (depth === undefined) depth = 0;
+    if (depth > PROP_DIFF_DEPTH) return typeof val;
     if (val === undefined) return "undefined";
     if (val === null) return "null";
-    if (typeof val === "function") return `fn:${val.name || "anonymous"}`;
-    if (typeof val === "object") {
-      if (Array.isArray(val)) return `Array(${val.length})`;
-      return `Object{${Object.keys(val).length}}`;
+    if (typeof val === "function") return "fn:" + (val.name || "anonymous");
+    if (typeof val === "string") {
+      return val.length > PROP_STRING_LIMIT ? val.slice(0, PROP_STRING_LIMIT) + "..." : val;
     }
-    if (typeof val === "string")
-      return val.length > 50 ? val.slice(0, 50) + "..." : val;
+    if (Array.isArray(val)) {
+      if (depth < PROP_DIFF_DEPTH) {
+        var items = [];
+        for (var i = 0; i < Math.min(val.length, PROP_DIFF_ARRAY_LIMIT); i++) {
+          items.push(serializeValue(val[i], depth + 1));
+        }
+        return "Array(" + val.length + ") [" + items.join(", ") + (val.length > PROP_DIFF_ARRAY_LIMIT ? ", ..." : "") + "]";
+      }
+      return "Array(" + val.length + ")";
+    }
+    if (typeof val === "object") {
+      var keys = Object.keys(val);
+      if (depth < PROP_DIFF_DEPTH) {
+        var parts = [];
+        for (var i = 0; i < Math.min(keys.length, PROP_DIFF_OBJ_LIMIT); i++) {
+          parts.push(keys[i] + ": " + serializeValue(val[keys[i]], depth + 1));
+        }
+        return "{" + parts.join(", ") + (keys.length > PROP_DIFF_OBJ_LIMIT ? " (+" + (keys.length - PROP_DIFF_OBJ_LIMIT) + ")" : "") + "}";
+      }
+      return "{" + keys.length + " keys}";
+    }
     return String(val);
   }
 
-  // =============================
-  // CAUSE CLASSIFICATION (ELITE)
-  // =============================
+  function getDetailedPropDiff(prevProps, nextProps) {
+    if (!prevProps) prevProps = {};
+    if (!nextProps) nextProps = {};
+    var changes = [];
+    var allKeys = {};
+    for (var key in prevProps) allKeys[key] = true;
+    for (var key in nextProps) allKeys[key] = true;
+
+    for (var key in allKeys) {
+      var prevVal = prevProps[key];
+      var nextVal = nextProps[key];
+      if (prevVal !== nextVal) {
+        var changeType = "value";
+        if (typeof nextVal === "function") changeType = "function";
+        if (typeof nextVal === "object" && nextVal !== null && !Array.isArray(nextVal)) changeType = "object";
+
+        changes.push({
+          key: key,
+          type: changeType,
+          isNew: !(key in prevProps),
+          isRemoved: !(key in nextProps),
+          isFunctionRefChange: typeof prevVal === "function" && typeof nextVal === "function" && prevVal !== nextVal,
+          isArrayChange: Array.isArray(prevVal) || Array.isArray(nextVal),
+          isPrimitive: prevVal === null || nextVal === null || typeof prevVal !== "object" || typeof nextVal !== "object",
+          prevValue: serializeValue(prevVal),
+          nextValue: serializeValue(nextVal),
+        });
+      }
+    }
+    return changes;
+  }
+
+  // ── Cause detection ──────────────────────────────────────────────
+  function detectContextChange(prevFiber, fiber) {
+    try {
+      var prevDeps = prevFiber.dependencies;
+      var nextDeps = fiber.dependencies;
+      if (!prevDeps && !nextDeps) return false;
+      if (!prevDeps || !nextDeps) return true;
+      if (prevDeps === nextDeps) return false;
+      if (prevDeps.items && nextDeps.items && prevDeps.items !== nextDeps.items) return true;
+      return prevDeps !== nextDeps;
+    } catch (e) {
+      return false;
+    }
+  }
+
   function classifyCause(changes) {
     if (!changes || changes.length === 0) return "parent";
-
-    // Priority: state > context > props > parent
-    if (changes.some((c) => c.type === "state")) return "state";
-    if (changes.some((c) => c.type === "context")) return "context";
-    if (changes.some((c) => c.type === "props")) return "props";
+    for (var i = 0; i < changes.length; i++) {
+      if (changes[i].type === "props") return "props";
+    }
+    for (var i = 0; i < changes.length; i++) {
+      if (changes[i].type === "context") return "context";
+    }
+    for (var i = 0; i < changes.length; i++) {
+      if (changes[i].type === "state") return "state";
+    }
     return "parent";
   }
 
-  // =============================
-  // RENDER CAUSE DETECTION
-  // =============================
   function detectRenderCause(prevFiber, fiber) {
-    const prevProps = prevFiber.memoizedProps || {};
-    const nextProps = fiber.memoizedProps || {};
-
-    const changes = [];
-    const propDiff = getDetailedPropDiff(prevProps, nextProps);
+    var prevProps = prevFiber.memoizedProps || {};
+    var nextProps = fiber.memoizedProps || {};
+    var propDiff = getDetailedPropDiff(prevProps, nextProps);
+    var changes = [];
 
     if (propDiff.length > 0) {
       changes.push({
         type: "props",
-        keys: propDiff.map((d) => d.key),
+        keys: propDiff.map(function (d) { return d.key; }),
         details: propDiff,
       });
     }
 
-    let contextChanged = false;
-    try {
-      const pd = fiber.dependencies;
-      const apd = prevFiber.dependencies;
-      if (pd != null || apd != null) {
-        contextChanged = pd !== apd;
-      }
-    } catch (_) {}
-
+    var contextChanged = detectContextChange(prevFiber, fiber);
     if (contextChanged) {
       changes.push({ type: "context" });
     }
 
-    const stateLike =
-      propDiff.length === 0 &&
-      !contextChanged &&
-      typeof fiber.flags === "number" &&
-      (fiber.flags & REACT_FLAG_UPDATE) !== 0;
-
-    if (stateLike) {
+    if (propDiff.length === 0 && !contextChanged && typeof fiber.flags === "number" && (fiber.flags & REACT_FLAG_UPDATE) !== 0) {
       changes.push({ type: "state" });
     }
 
@@ -230,571 +200,495 @@
       changes.push({ type: "parent" });
     }
 
-    return { changes, propDiff, causeType: classifyCause(changes) };
+    return { changes: changes, propDiff: propDiff, causeType: classifyCause(changes) };
   }
 
-  // =============================
-  // TRUE ROOT CAUSE CHAIN (ELITE)
-  // =============================
+  // ── Causal chain ─────────────────────────────────────────────────
   function buildCauseChain(fiber) {
-    const chain = [];
-    let current = fiber;
+    var chain = [];
+    var current = fiber;
 
     while (current) {
-      const name = getComponentName(current);
+      var name = getComponentName(current);
       if (!name || !isUserComponent(current)) {
         current = current.return;
         continue;
       }
-
-      const data = commitMap.get(current);
-      if (data?.rendered) {
+      var data = commitMap.get(current);
+      if (data && data.rendered) {
         chain.push({
-          name,
+          name: name,
           causeType: data.causeType || "parent",
           cause: data.cause || { changes: [{ type: "unknown" }] },
           fiberKey: current.key,
         });
       }
-
       current = current.return;
     }
 
-    chain.reverse(); // Root first
+    chain.reverse();
 
-    // 🔥 FIND TRUE ROOT CAUSE
-    let rootIndex = chain.findIndex((node) => node.causeType !== "parent");
+    var rootIndex = -1;
+    for (var i = 0; i < chain.length; i++) {
+      if (chain[i].causeType !== "parent") {
+        rootIndex = i;
+        break;
+      }
+    }
     if (rootIndex === -1) rootIndex = chain.length - 1;
 
-    return {
-      chain,
-      rootIndex,
-      rootCause: chain[rootIndex],
-    };
+    return { chain: chain, rootIndex: rootIndex, rootCause: chain[rootIndex] || null };
   }
 
-  // =============================
-  // ADVANCED PATTERN DETECTION
-  // =============================
+  // ── Pattern detection ────────────────────────────────────────────
   function detectAdvancedPatterns(fiber, propDiff, causeChainData) {
-    const patterns = [];
-    const { chain, rootIndex, rootCause } = causeChainData;
+    var patterns = [];
+    var chain = causeChainData.chain;
+    var rootIndex = causeChainData.rootIndex;
+    var rootCause = causeChainData.rootCause;
 
-    // 1. Wasted Chain Detection
-    const allParent = chain.every((node) => node.causeType === "parent");
+    var allParent = true;
+    for (var i = 0; i < chain.length; i++) {
+      if (chain[i].causeType !== "parent") { allParent = false; break; }
+    }
     if (allParent && chain.length > 1) {
       patterns.push({
-        type: "wasted-chain",
-        severity: "critical",
-        chainLength: chain.length,
-        suggestion: `Entire ${chain.length}-level chain is wasted re-renders. Memoize ${chain[0]?.name}`,
-        confidence: 95,
-        impact: "Would eliminate 100% of this cascade",
+        type: "wasted-chain", severity: "critical", chainLength: chain.length,
+        suggestion: "Memoize " + (chain[0] ? chain[0].name : "root") + " with React.memo()",
+        confidence: 95, impact: "Would eliminate 100% of this cascade",
       });
     }
 
-    // 2. Context Explosion Detection
-    if (rootCause?.causeType === "context") {
-      const affectedCount = chain.length - 1; // Excluding root
-      if (affectedCount > 3) {
+    if (rootCause && rootCause.causeType === "context") {
+      var affected = chain.length - 1;
+      if (affected > 3) {
         patterns.push({
-          type: "context-explosion",
-          severity: "high",
-          affectedComponents: affectedCount,
-          rootComponent: rootCause.name,
-          suggestion: `Context in ${rootCause.name} caused ${affectedCount} downstream re-renders. Consider splitting context or using selectors`,
-          confidence: 85,
-          impact: `Could reduce ${affectedCount} unnecessary re-renders`,
+          type: "context-explosion", severity: "high", affectedComponents: affected, rootComponent: rootCause.name,
+          suggestion: "Context in " + rootCause.name + " caused " + affected + " downstream re-renders. Consider splitting context or using selectors",
+          confidence: 85, impact: "Could reduce " + affected + " unnecessary re-renders",
         });
       }
     }
 
-    // 3. Prop Cascade Detection (prop drilling)
-    if (rootCause?.causeType === "props") {
-      const propKeys =
-        rootCause.cause?.changes?.find((c) => c.type === "props")?.keys || [];
-      const drillingDepth = chain.length - rootIndex;
-
-      if (drillingDepth > 3 && propKeys.length > 0) {
+    if (rootCause && rootCause.causeType === "props") {
+      var propKeys = [];
+      var causeChanges = rootCause.cause && rootCause.cause.changes;
+      if (causeChanges) {
+        for (var i = 0; i < causeChanges.length; i++) {
+          if (causeChanges[i].type === "props" && causeChanges[i].keys) {
+            propKeys = causeChanges[i].keys;
+            break;
+          }
+        }
+      }
+      if (chain.length - rootIndex > 3 && propKeys.length > 0) {
         patterns.push({
-          type: "prop-cascade",
-          severity: "high",
-          depth: drillingDepth,
-          props: propKeys,
-          suggestion: `Prop drilling detected: ${propKeys.join(", ")} through ${drillingDepth} levels. Consider context or composition`,
-          confidence: 80,
-          impact: "Reduces coupling and render cascades",
+          type: "prop-cascade", severity: "high", depth: chain.length - rootIndex, props: propKeys,
+          suggestion: "Prop drilling: " + propKeys.join(", ") + " through " + (chain.length - rootIndex) + " levels. Consider context or composition",
+          confidence: 80, impact: "Reduces coupling and render cascades",
         });
       }
     }
 
-    // 4. Unstable function props
-    const unstableFunctions = propDiff.filter((d) => d.isFunctionRefChange);
+    var unstableFunctions = [];
+    for (var i = 0; i < propDiff.length; i++) {
+      if (propDiff[i].isFunctionRefChange) unstableFunctions.push(propDiff[i].key);
+    }
     if (unstableFunctions.length > 0) {
       patterns.push({
-        type: "unstable-function-prop",
-        severity: "high",
-        props: unstableFunctions.map((f) => f.key),
-        suggestion: `Wrap ${unstableFunctions.map((f) => f.key).join(", ")} in useCallback()`,
-        confidence: 90,
-        impact: "Likely reduces 60-80% of re-renders",
+        type: "unstable-function-prop", severity: "high", props: unstableFunctions,
+        suggestion: "Wrap " + unstableFunctions.join(", ") + " in useCallback()",
+        confidence: 90, impact: "Likely reduces 60-80% of re-renders",
       });
     }
 
-    // 5. Object prop instability
-    const objectChanges = propDiff.filter(
-      (d) => d.type === "object" && !d.isNew && !d.isRemoved,
-    );
+    var objectChanges = [];
+    for (var i = 0; i < propDiff.length; i++) {
+      if (propDiff[i].type === "object" && !propDiff[i].isNew && !propDiff[i].isRemoved) {
+        objectChanges.push(propDiff[i].key);
+      }
+    }
     if (objectChanges.length > 0) {
       patterns.push({
-        type: "object-prop-instability",
-        severity: "medium",
-        props: objectChanges.map((o) => o.key),
-        suggestion: `Stabilize objects with useMemo()`,
-        confidence: 70,
-        impact: "May reduce 40-60% of re-renders",
+        type: "object-prop-instability", severity: "medium", props: objectChanges,
+        suggestion: "Stabilize objects with useMemo()",
+        confidence: 70, impact: "May reduce 40-60% of re-renders",
       });
     }
 
-    // 6. Deep propagation
     if (chain.length > 4) {
       patterns.push({
-        type: "deep-propagation",
-        severity: "high",
-        chainLength: chain.length,
-        suggestion: `Consider memoizing intermediate components in ${chain.length}-level chain`,
-        confidence: 75,
-        impact: "Could break cascade at multiple points",
+        type: "deep-propagation", severity: "high", chainLength: chain.length,
+        suggestion: "Consider memoizing intermediate components in " + chain.length + "-level chain",
+        confidence: 75, impact: "Could break cascade at multiple points",
       });
     }
 
     return patterns;
   }
 
-  // =============================
-  // PREDICTIVE OPTIMIZATION (BREAKTHROUGH)
-  // =============================
-  function predictOptimizationImpact(fiber, causeChainData, patterns) {
-    const { chain, rootIndex } = causeChainData;
-    const predictions = [];
+  // ── Predictions & scoring ────────────────────────────────────────
+  function predictOptimization(fiber, causeChainData, patterns) {
+    var predictions = [];
+    var chain = causeChainData.chain;
+    var rootIndex = causeChainData.rootIndex;
 
-    // Predict React.memo impact
-    const wastedPattern = patterns.find((p) => p.type === "wasted-chain");
-    if (wastedPattern) {
-      predictions.push({
-        optimization: `React.memo(${getComponentName(fiber)})`,
-        expectedReduction: 95,
-        reasoning:
-          "Component has no prop/state changes, pure parent propagation",
-        confidence: 95,
-      });
+    for (var i = 0; i < patterns.length; i++) {
+      if (patterns[i].type === "wasted-chain") {
+        predictions.push({
+          optimization: "React.memo(" + (getComponentName(fiber) || "Component") + ")",
+          expectedReduction: 95, reasoning: "Component has no prop/state changes, pure parent propagation",
+          confidence: 95,
+        });
+        break;
+      }
     }
-
-    // Predict useCallback impact
-    const unstableFunc = patterns.find(
-      (p) => p.type === "unstable-function-prop",
-    );
-    if (unstableFunc) {
-      const chainImpact = chain.length - rootIndex;
-      const reduction = Math.min(70 + chainImpact * 5, 95);
-      predictions.push({
-        optimization: `useCallback() for ${unstableFunc.props.join(", ")}`,
-        expectedReduction: reduction,
-        reasoning: `Stabilizing function props would prevent ${chainImpact}-level cascade`,
-        confidence: 85,
-      });
+    for (var i = 0; i < patterns.length; i++) {
+      if (patterns[i].type === "unstable-function-prop") {
+        var impact = chain.length - rootIndex;
+        predictions.push({
+          optimization: "useCallback() for " + patterns[i].props.join(", "),
+          expectedReduction: Math.min(70 + impact * 5, 95),
+          reasoning: "Stabilizing function props would prevent " + impact + "-level cascade",
+          confidence: 85,
+        });
+        break;
+      }
     }
-
-    // Predict context splitting impact
-    const contextExplosion = patterns.find(
-      (p) => p.type === "context-explosion",
-    );
-    if (contextExplosion) {
-      const reduction = Math.min(
-        60 + contextExplosion.affectedComponents * 3,
-        90,
-      );
-      predictions.push({
-        optimization: "Split context or use selectors",
-        expectedReduction: reduction,
-        reasoning: `${contextExplosion.affectedComponents} components re-render from single context`,
-        confidence: 75,
-      });
+    for (var i = 0; i < patterns.length; i++) {
+      if (patterns[i].type === "context-explosion") {
+        predictions.push({
+          optimization: "Split context or use selectors",
+          expectedReduction: Math.min(60 + patterns[i].affectedComponents * 3, 90),
+          reasoning: patterns[i].affectedComponents + " components re-render from single context",
+          confidence: 75,
+        });
+        break;
+      }
     }
-
     return predictions;
   }
 
-  // =============================
-  // CONFIDENCE SCORING
-  // =============================
-  function calculateConfidence(patterns, causeChainData) {
-    let confidence = 0;
-    const reasons = [];
-
-    const { chain, rootCause } = causeChainData;
-
-    // Wasted chain = highest confidence
-    if (patterns.some((p) => p.type === "wasted-chain")) {
-      confidence += 95;
-      reasons.push("Entire chain is wasted renders");
-    }
-
-    // Unstable functions = high confidence
-    if (patterns.some((p) => p.type === "unstable-function-prop")) {
-      confidence += 85;
-      reasons.push("Function reference changes detected");
-    }
-
-    // Context explosion = high confidence
-    if (patterns.some((p) => p.type === "context-explosion")) {
-      confidence += 80;
-      reasons.push("Context causing cascade re-renders");
-    }
-
-    // Root cause type matters
-    if (rootCause?.causeType === "parent") {
-      confidence += 20;
-      reasons.push("Parent-only propagation");
-    }
-
-    // Deep chain amplifies confidence
-    if (chain.length > 4) {
-      confidence += 15;
-      reasons.push(`Deep ${chain.length}-level propagation`);
-    }
-
-    return {
-      score: Math.min(confidence, 100),
-      reasons,
-    };
-  }
-
-  // =============================
-  // RENDER SCORE
-  // =============================
   function calculateRenderScore(renders, exclusive, patterns) {
-    let score = renders * exclusive;
-
-    const criticalPatterns = patterns.filter((p) => p.severity === "critical");
-    score += criticalPatterns.length * 50;
-
-    const highPatterns = patterns.filter((p) => p.severity === "high");
-    score += highPatterns.length * 20;
-
+    var score = renders * exclusive;
+    for (var i = 0; i < patterns.length; i++) {
+      if (patterns[i].severity === "critical") score += 50;
+      if (patterns[i].severity === "high") score += 20;
+    }
     return score;
   }
 
   function getScoreLabel(score) {
-    if (score > 500) return { emoji: "🔥🔥🔥", label: "Critical" };
-    if (score > 200) return { emoji: "🔥🔥", label: "High" };
-    if (score > 50) return { emoji: "🔥", label: "Medium" };
-    return { emoji: "⚪", label: "Low" };
+    if (score > 500) return { emoji: "\uD83D\uDD25\uD83D\uDD25\uD83D\uDD25", label: "Critical" };
+    if (score > 200) return { emoji: "\uD83D\uDD25\uD83D\uDD25", label: "High" };
+    if (score > 50) return { emoji: "\uD83D\uDD25", label: "Medium" };
+    return { emoji: "\u26AA", label: "Low" };
   }
 
-  // =============================
-  // COMPONENT TREE
-  // =============================
-  function buildComponentTree(fiber, depth = 0, maxDepth = 15) {
-    if (!fiber || depth > maxDepth) return null;
-
-    const name = getComponentName(fiber);
-    // if (typeof fiber.type === "function") {
-    // console.log(fiber.type.name);
-    // }
-
-    if (!name || !isUserComponent(fiber)) {
-      const children = [];
-      let child = fiber.child;
-      while (child) {
-        const result = buildComponentTree(child, depth, maxDepth);
-        if (result) {
-          if (Array.isArray(result)) {
-            children.push(...result);
-          } else {
-            children.push(result);
-          }
-        }
-        child = child.sibling;
-      }
-      return children.length > 0 ? children : null;
-    }
-
-    const data = commitMap.get(fiber);
-    const node = {
-      name,
-      depth,
-      children: [],
-      key: fiber.key || `${name}-${depth}`,
-      didRender: data?.rendered || false,
-      causeType: data?.causeType || "unknown",
-      renderCount: globalStats.get(name)?.renders || 0,
-      score: globalStats.get(name)?.score || 0,
-      scoreLabel: globalStats.get(name)
-        ? getScoreLabel(globalStats.get(name).score)
-        : { emoji: "⚪", label: "Low" },
-    };
-
-    let child = fiber.child;
-    while (child) {
-      const childNode = buildComponentTree(child, depth + 1, maxDepth);
-      if (childNode) {
-        if (Array.isArray(childNode)) {
-          node.children.push(...childNode);
-        } else {
-          node.children.push(childNode);
-        }
-      }
-      child = child.sibling;
-    }
-
-    return node;
-  }
-
-  // =============================
-  // COUNTING
-  // =============================
-  function isUserComponentRender(node) {
-    if (!node.alternate) return false;
-    if (![0, 1, 11, 14, 15].includes(node.tag)) return false;
-    return isUserComponent(node);
-  }
-
+  // ── Render counting ──────────────────────────────────────────────
   function countSubtreeRenders(rootFiber) {
-    let count = 0;
-
-    function walk(node) {
-      if (!node) return;
-      if (isUserComponentRender(node)) count++;
-      walk(node.child);
-      walk(node.sibling);
+    var count = 0;
+    var stack = [rootFiber];
+    while (stack.length > 0) {
+      var fiber = stack.pop();
+      if (!fiber) continue;
+      if (isTrackableRenderFiber(fiber)) count++;
+      var child = fiber.child;
+      while (child) { stack.push(child); child = child.sibling; }
     }
-
-    walk(rootFiber);
     return count;
   }
 
   function findChildRoots(rootFiber) {
-    const roots = [];
-
-    function walk(node) {
-      if (!node) return;
-      if (node !== rootFiber && isExclusiveSubtreeBoundary(node)) {
-        roots.push(node);
-        return;
+    var roots = [];
+    var stack = [rootFiber];
+    while (stack.length > 0) {
+      var fiber = stack.pop();
+      if (!fiber) continue;
+      if (fiber !== rootFiber && isSubtreeBoundary(fiber)) {
+        roots.push(fiber);
+        continue;
       }
-      walk(node.child);
-      walk(node.sibling);
+      var child = fiber.child;
+      while (child) { stack.push(child); child = child.sibling; }
     }
-
-    walk(rootFiber);
     return roots;
   }
 
   function countExclusiveRenders(rootFiber) {
-    const total = countSubtreeRenders(rootFiber);
-    const childRoots = findChildRoots(rootFiber);
-
-    let childTotal = 0;
-    childRoots.forEach((child) => {
-      childTotal += countSubtreeRenders(child);
-    });
-
+    var total = countSubtreeRenders(rootFiber);
+    var childRoots = findChildRoots(rootFiber);
+    var childTotal = 0;
+    for (var i = 0; i < childRoots.length; i++) {
+      childTotal += countSubtreeRenders(childRoots[i]);
+    }
     return total - childTotal;
   }
 
-  // =============================
-  // TRACK ROOT FIBER (ELITE)
-  // =============================
+  // ── Track single fiber ───────────────────────────────────────────
   function trackRootFiber(fiber) {
-    const name = getComponentCacheName(fiber);
+    var name = getComponentName(fiber);
+    if (!name || !fiber.alternate) return null;
 
-    if (!name || !fiber.alternate) return;
+    var prevFiber = fiber.alternate;
+    var causeResult = detectRenderCause(prevFiber, fiber);
+    var causeChainData = buildCauseChain(fiber);
 
-    const prevFiber = fiber.alternate;
-    const { changes, propDiff, causeType } = detectRenderCause(
-      prevFiber,
-      fiber,
-    );
-
-    // Mark in commit map
-    const causeChainData = buildCauseChain(fiber);
     commitMap.set(fiber, {
       rendered: true,
-      cause: { changes, propDiff },
-      causeType,
+      cause: { changes: causeResult.changes, propDiff: causeResult.propDiff },
+      causeType: causeResult.causeType,
     });
 
-    let record = fiberRenderStore.get(fiber);
-    if (!record) {
-      record = { count: 0 };
-      fiberRenderStore.set(fiber, record);
-    }
+    var record = fiberRenderStore.get(fiber);
+    if (!record) { record = { count: 0 }; fiberRenderStore.set(fiber, record); }
     record.count++;
 
-    const total = countSubtreeRenders(fiber);
-    const exclusive = countExclusiveRenders(fiber);
+    var total = countSubtreeRenders(fiber);
+    var exclusive = countExclusiveRenders(fiber);
+    var patterns = detectAdvancedPatterns(fiber, causeResult.propDiff, causeChainData);
 
-    // Advanced pattern detection
-    const patterns = detectAdvancedPatterns(fiber, propDiff, causeChainData);
-
-    // Predictive optimization
-    const predictions = predictOptimizationImpact(
-      fiber,
-      causeChainData,
-      patterns,
-    );
-
-    // Confidence scoring
-    const confidenceData = calculateConfidence(patterns, causeChainData);
-
-    // Global stats
-    let stat = globalStats.get(name);
+    var stat = globalStats.get(name);
     if (!stat) {
-      stat = {
-        renders: 0,
-        total: 0,
-        exclusive: 0,
-        score: 0,
-        patterns: [],
-      };
+      stat = { renders: 0, total: 0, exclusive: 0, score: 0, patterns: [] };
       globalStats.set(name, stat);
     }
-
     stat.renders++;
     stat.total += total;
     stat.exclusive += exclusive;
     stat.score = calculateRenderScore(stat.renders, stat.exclusive, patterns);
 
-    patterns.forEach((p) => {
-      const exists = stat.patterns.find((existing) => existing.type === p.type);
-      if (!exists) stat.patterns.push(p);
-    });
+    for (var i = 0; i < patterns.length; i++) {
+      var exists = false;
+      for (var j = 0; j < stat.patterns.length; j++) {
+        if (stat.patterns[j].type === patterns[i].type) { exists = true; break; }
+      }
+      if (!exists) stat.patterns.push(patterns[i]);
+    }
 
-    currentCommitUpdates.push({
-      name,
+    var score = calculateRenderScore(record.count, exclusive, patterns);
+
+    var prevKey = fiber.alternate ? fiber.alternate.key : null;
+    var currentKey = fiber.key;
+    var startTime = performance.now();
+    var changedPropCount = causeResult.propDiff ? causeResult.propDiff.length : 0;
+    var totalPropCount = 0;
+    if (fiber.memoizedProps) { var k = 0; for (var _ in fiber.memoizedProps) { k++; } totalPropCount = k; }
+    var renderDuration = performance.now() - startTime;
+
+    return {
+      name: name,
       count: record.count,
-      total,
-      exclusive,
-      changes,
-      propDiff,
-      patterns,
+      total: total,
+      exclusive: exclusive,
+      changes: causeResult.changes,
+      propDiff: causeResult.propDiff,
+      patterns: patterns,
       causeChain: causeChainData.chain,
       rootIndex: causeChainData.rootIndex,
       rootCause: causeChainData.rootCause,
-      predictions,
-      confidence: confidenceData,
+      predictions: predictOptimization(fiber, causeChainData, patterns),
       timestamp: Date.now(),
-      score: calculateRenderScore(record.count, exclusive, patterns),
-      scoreLabel: getScoreLabel(
-        calculateRenderScore(record.count, exclusive, patterns),
-      ),
+      score: score,
+      scoreLabel: getScoreLabel(score),
       commitId: commitCounter,
-    });
+      keyChanged: prevKey !== currentKey,
+      changedPropCount: changedPropCount,
+      totalPropCount: totalPropCount,
+      changeRatio: totalPropCount > 0 ? changedPropCount / totalPropCount : 0,
+      allPropsChanged: totalPropCount > 0 && changedPropCount === totalPropCount,
+      renderDurationMs: Math.round(renderDuration * 100) / 100,
+    };
   }
 
-  // =============================
-  // TRAVERSAL
-  // =============================
-  function traverseFiberTree(rootFiber) {
-    let node = rootFiber;
-
-    while (node) {
-      if (isTrackableRenderFiber(node)) {
-        trackRootFiber(node);
+  // ── Fiber walks ──────────────────────────────────────────────────
+  function collectUpdates(rootFiber) {
+    var updates = [];
+    var stack = [rootFiber];
+    while (stack.length > 0) {
+      var fiber = stack.pop();
+      if (!fiber) continue;
+      if (isTrackableRenderFiber(fiber)) {
+        var update = trackRootFiber(fiber);
+        if (update) updates.push(update);
       }
+      var child = fiber.child;
+      while (child) { stack.push(child); child = child.sibling; }
+    }
+    return updates;
+  }
 
-      if (node.child) {
-        node = node.child;
-        continue;
-      }
+  function buildComponentTree(rootFiber) {
+    var tree = null;
+    var stack = [{ fiber: rootFiber, parentNode: null }];
+    while (stack.length > 0) {
+      var item = stack.pop();
+      if (!item || !item.fiber) continue;
 
-      while (node) {
-        if (node.sibling) {
-          node = node.sibling;
-          break;
+      var name = getComponentName(item.fiber);
+      var isUser = isUserComponent(item.fiber);
+
+      if (name && isUser) {
+        var data = commitMap.get(item.fiber);
+        var node = {
+          name: name,
+          depth: 0,
+          children: [],
+          key: item.fiber.key || name,
+          didRender: !!(data && data.rendered),
+          causeType: data ? data.causeType : "unknown",
+          renderCount: 0,
+          score: 0,
+          scoreLabel: { emoji: "\u26AA", label: "Low" },
+        };
+        var stat = globalStats.get(name);
+        if (stat) {
+          node.renderCount = stat.renders;
+          node.score = stat.score;
+          node.scoreLabel = getScoreLabel(stat.score);
         }
-        node = node.return;
+        if (item.parentNode) {
+          item.parentNode.children.push(node);
+        } else {
+          tree = node;
+        }
+        var children = [];
+        var child = item.fiber.child;
+        while (child) { children.push(child); child = child.sibling; }
+        for (var i = children.length - 1; i >= 0; i--) {
+          stack.push({ fiber: children[i], parentNode: node });
+        }
+      } else {
+        var child = item.fiber.child;
+        var batch = [];
+        while (child) { batch.push(child); child = child.sibling; }
+        for (var i = batch.length - 1; i >= 0; i--) {
+          stack.push({ fiber: batch[i], parentNode: item.parentNode });
+        }
       }
     }
+    return tree;
   }
 
-  // =============================
-  // TIMELINE
-  // =============================
-  function cloneSerializable(value) {
-    try {
-      if (typeof structuredClone === "function") {
-        return structuredClone(value);
-      }
-    } catch (_) {}
-    try {
-      return JSON.parse(JSON.stringify(value));
-    } catch (e) {
-      console.warn("[Tracker] Serialization failed:", e);
-      return null;
-    }
-  }
-
-  function estimateJsonSize(obj) {
-    try {
-      return JSON.stringify(obj).length;
-    } catch {
-      return Number.MAX_SAFE_INTEGER;
-    }
-  }
-
-  function trimHeavyPayload(payload) {
-    if (estimateJsonSize(payload) <= MAX_PAYLOAD_CHARS) return payload;
+  // ── Timeline ─────────────────────────────────────────────────────
+  function compactUpdate(update) {
     return {
-      ...payload,
-      timeline: Array.isArray(payload.timeline)
-        ? payload.timeline.slice(-25)
-        : [],
-      currentCommitUpdates: Array.isArray(payload.currentCommitUpdates)
-        ? payload.currentCommitUpdates.slice(0, 120)
-        : [],
-      componentTree: payload.componentTree,
-      globalStats: Array.isArray(payload.globalStats)
-        ? payload.globalStats.slice(0, 200)
-        : [],
+      name: update.name,
+      total: update.total,
+      exclusive: update.exclusive,
+      changes: update.changes,
+      causeType: update.causeType,
+      score: update.score,
+      timestamp: update.timestamp,
+      commitId: update.commitId,
     };
   }
 
   function addToTimeline(updates, tree) {
-    const clonedUpdates = cloneSerializable(updates);
-    if (!clonedUpdates) return;
-
-    const timelineEntry = {
+    var compacted = [];
+    for (var i = 0; i < updates.length; i++) {
+      compacted.push(compactUpdate(updates[i]));
+    }
+    renderTimeline.push({
       timestamp: Date.now(),
       commitId: commitCounter,
-      updates: clonedUpdates,
+      updates: compacted,
       componentTree: tree,
-    };
-
-    renderTimeline.push(timelineEntry);
-
+    });
     while (renderTimeline.length > MAX_TIMELINE_ENTRIES) {
       renderTimeline.shift();
     }
   }
 
-  // =============================
-  // HOOK PATCH
-  // =============================
+  // ── Payload ──────────────────────────────────────────────────────
+  function buildGlobalStatsArray() {
+    var arr = [];
+    var entries = globalStats.entries();
+    var next;
+    while ((next = entries.next()) && !next.done) {
+      var name = next.value[0];
+      var stat = next.value[1];
+      arr.push({
+        name: name,
+        renders: stat.renders,
+        total: stat.total,
+        exclusive: stat.exclusive,
+        score: stat.score,
+        patterns: stat.patterns,
+        scoreLabel: getScoreLabel(stat.score),
+      });
+    }
+    return arr;
+  }
+
+  function buildPayload(tree) {
+    return {
+      currentCommitUpdates: currentCommitUpdates,
+      timeline: renderTimeline.slice(-TIMELINE_SEND_COUNT),
+      componentTree: tree,
+      globalStats: buildGlobalStatsArray(),
+    };
+  }
+
+  function trimPayload(payload) {
+    var size = JSON.stringify(payload).length;
+    if (size <= MAX_PAYLOAD_CHARS) return payload;
+
+    console.warn(
+      "[Tracker] Payload too large (" + (size / 1024 / 1024).toFixed(1) + "MB). " +
+      "Truncating timeline to " + OVERFLOW_TRIM_TIMELINE + " entries and updates to " + OVERFLOW_TRIM_UPDATES + "."
+    );
+
+    return {
+      currentCommitUpdates: (payload.currentCommitUpdates || []).slice(-OVERFLOW_TRIM_UPDATES),
+      timeline: (payload.timeline || []).slice(-OVERFLOW_TRIM_TIMELINE),
+      componentTree: payload.componentTree,
+      globalStats: (payload.globalStats || []).slice(0, STATS_MAX_ENTRIES),
+    };
+  }
+
+  function serializePayload(payload) {
+    try {
+      var json = JSON.stringify(payload);
+      if (json.length > MAX_PAYLOAD_CHARS) {
+        console.warn("[Tracker] Payload " + json.length + " chars exceeds limit, trimming");
+        var trimmed = trimPayload(payload);
+        json = JSON.stringify(trimmed);
+      }
+      return JSON.parse(json);
+    } catch (e) {
+      console.error("[Tracker] Serialization failed:", e);
+      return null;
+    }
+  }
+
+  // ── Commit processing ────────────────────────────────────────────
+  function processCommit(rootFiber) {
+    var updates = collectUpdates(rootFiber);
+    if (updates.length === 0) return null;
+
+    var tree = buildComponentTree(rootFiber);
+    currentCommitUpdates = updates;
+    addToTimeline(updates, tree);
+
+    var payload = buildPayload(tree);
+    return serializePayload(payload);
+  }
+
+  // ── Hook patching ────────────────────────────────────────────────
   function patchReactHook(hook) {
     if (hook.__RENDER_TRACKER_PATCHED__) return;
 
-    const original = hook.onCommitFiberRoot;
+    var original = hook.onCommitFiberRoot;
     if (typeof original !== "function") {
-      console.warn("[Tracker] onCommitFiberRoot missing; cannot patch.");
+      console.warn("[Tracker] onCommitFiberRoot is not a function");
       return;
     }
 
-    hook.onCommitFiberRoot = function (id, root, ...args) {
-      let commitResult;
+    hook.onCommitFiberRoot = function (id, root) {
+      var result;
       try {
-        commitResult = original.apply(this, [id, root, ...args]);
+        result = original.apply(this, arguments);
       } catch (e) {
         console.error("[Tracker] React commit hook error:", e);
         throw e;
@@ -802,74 +696,62 @@
 
       commitCounter++;
       currentCommitUpdates = [];
+      commitMap = new WeakMap();
 
       try {
-        if (!root?.current) return commitResult;
+        if (!root || !root.current) return result;
 
-        traverseFiberTree(root.current);
+        var cloned = processCommit(root.current);
+        if (!cloned) return result;
 
-        const tree = buildComponentTree(root.current);
-
-        if (currentCommitUpdates.length > 0) {
-          addToTimeline(currentCommitUpdates, tree);
-          const payload = {
-            currentCommitUpdates: currentCommitUpdates,
-            timeline: renderTimeline.slice(-50),
-            componentTree: tree,
-            globalStats: Array.from(globalStats.entries()).map(
-              ([name, stat]) => ({
-                name,
-                ...stat,
-                scoreLabel: getScoreLabel(stat.score),
-              }),
-            ),
-          };
-
-          const safe = trimHeavyPayload(payload);
-          const cloned = cloneSerializable(safe);
-          if (!cloned) return commitResult;
-
-          const origin = window.location.origin;
-          const targetOrigin =
-            origin && origin !== "null" && origin !== "undefined"
-              ? origin
-              : "*";
-
-          window.postMessage(
-            {
-              source: "react-render-tracker",
-              payload: cloned,
-              commitId: commitCounter,
-            },
-            targetOrigin,
-          );
-        }
+        var origin = window.location.origin;
+        window.postMessage(
+          { source: "react-render-tracker", payload: cloned, commitId: commitCounter },
+          (origin && origin !== "null") ? origin : "*"
+        );
       } catch (e) {
         console.error("[Tracker] Collection error:", e);
       }
 
-      return commitResult;
+      return result;
     };
 
     hook.__RENDER_TRACKER_PATCHED__ = true;
-    console.log(
-      "%c[Tracker] Render tracker active",
-      "color:#059669;font-weight:bold;",
-    );
+    console.log("%c[Tracker] Render tracker active", "color:#059669;font-weight:bold;");
   }
 
-  let hookWaitAttempts = 0;
-  function waitForHook() {
-    const hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+  // ── Create hook if missing ──────────────────────────────────────
+  function ensureHook() {
+    var existing = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+    if (existing) return existing;
 
+    var hook = {
+      renderers: new Map(),
+      supportsFiber: true,
+      supportsMutation: true,
+      inject: function () {},
+      onCommitFiberRoot: function () {},
+      onCommitFiberUnmount: function () {},
+      getFiberRoots: function () { return new Set(); },
+    };
+    try {
+      Object.defineProperty(window, "__REACT_DEVTOOLS_GLOBAL_HOOK__", { value: hook, configurable: false });
+    } catch (e) {
+      window.__REACT_DEVTOOLS_GLOBAL_HOOK__ = hook;
+    }
+    return hook;
+  }
+
+  // ── Poll for React hook ──────────────────────────────────────────
+  var attempts = 0;
+  function waitForHook() {
+    var hook = ensureHook();
     if (hook && typeof hook.onCommitFiberRoot === "function") {
       patchReactHook(hook);
-    } else if (hookWaitAttempts++ < HOOK_WAIT_MAX_ATTEMPTS) {
+    } else if (attempts++ < HOOK_MAX_ATTEMPTS) {
       setTimeout(waitForHook, HOOK_POLL_MS);
     } else {
-      console.warn(
-        "[Tracker] React DevTools global hook not found (not a React app or script ran too late).",
-      );
+      console.warn("[Tracker] Failed to setup hook.");
     }
   }
 

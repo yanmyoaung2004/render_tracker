@@ -1,1682 +1,945 @@
-import React, { useEffect, useState, useMemo, useRef } from "react";
+import React, { useEffect, useState, useMemo, useRef, useReducer, useCallback } from "react";
+import {
+  Flame, AlertTriangle, AlertCircle, Info, Minus,
+  BrainCircuit, ArrowLeftRight, Globe, CornerUpRight,
+  HelpCircle, Square, ChevronDown, ChevronRight, WifiOff,
+  MousePointer2, Table2, GitBranch, BarChart3, Clock,
+  Lightbulb, History,
+  Activity, X, Search, Download, Trash2,
+} from "lucide-react";
+import { createStyles } from "./styles";
+import { themes as themeMap, typography } from "./theme";
+import { componentsReducer } from "./componentData";
+import { evaluateRules, evaluateAllComponents, CATEGORIES } from "./rulesEngine";
 
-const App = () => {
-  const [components, setComponents] = useState({});
-  const [sortBy, setSortBy] = useState("score");
-  const [selectedComponent, setSelectedComponent] = useState(null);
-  const [recentUpdates, setRecentUpdates] = useState([]);
-  const [globalStats, setGlobalStats] = useState([]);
-  const [componentTree, setComponentTree] = useState(null);
-  const [timeline, setTimeline] = useState([]);
-  const [viewMode, setViewMode] = useState("table");
-  const [timelineIndex, setTimelineIndex] = useState(0);
-  const [autoInsights, setAutoInsights] = useState([]);
-  const canvasRef = useRef(null);
+var ICON_SIZE = 16;
+var sidebarDefault = 450;
+var insightsDebounceMs = 200;
+var recentUpdatesMax = 50;
 
-  // Sidebar resize
-  const [sidebarWidth, setSidebarWidth] = useState(450);
-  const [isResizing, setIsResizing] = useState(false);
+function getCauseIcon(causeType) {
+  var props = { size: ICON_SIZE };
+  switch (causeType) {
+    case "state": return React.createElement(BrainCircuit, props);
+    case "props": return React.createElement(ArrowLeftRight, props);
+    case "context": return React.createElement(Globe, props);
+    case "parent": return React.createElement(CornerUpRight, props);
+    default: return React.createElement(HelpCircle, props);
+  }
+}
 
-  // Connection status
-  const [isConnected, setIsConnected] = useState(false);
+function getScoreIcon(score) {
+  var props = { size: ICON_SIZE };
+  if (score > 500) return React.createElement(AlertTriangle, props);
+  if (score > 200) return React.createElement(AlertCircle, props);
+  if (score > 50) return React.createElement(Info, props);
+  return React.createElement(Minus, props);
+}
 
-  useEffect(() => {
-    window.portPromise.then((port) => {
-      if (!port?.onMessage) {
-        console.error("[App] Invalid devtools port");
-        return;
+function getScoreLabel(score) {
+  if (score > 500) return { icon: AlertTriangle, label: "Critical" };
+  if (score > 200) return { icon: AlertCircle, label: "High" };
+  if (score > 50) return { icon: Info, label: "Medium" };
+  return { icon: Minus, label: "Low" };
+}
+
+function formatRenderCauses(changes) {
+  if (!changes || changes.length === 0) return "Parent re-render";
+  return changes.map(function (c) {
+    if (c.type === "props" && c.keys) return "Props: " + c.keys.join(", ");
+    if (c.type === "state") return "State changed";
+    if (c.type === "context") return "Context changed";
+    if (c.type === "parent") return "Parent re-render";
+    return c.type;
+  }).join(" \u2022 ");
+}
+
+function getHeatmapColor(value, max, heatmap) {
+  var intensity = Math.min(value / Math.max(max, 1), 1);
+  if (intensity < 0.2) return heatmap[0];
+  if (intensity < 0.4) return heatmap[1];
+  if (intensity < 0.6) return heatmap[2];
+  if (intensity < 0.8) return heatmap[3];
+  return heatmap[4];
+}
+
+function getTextColor(value, max, isDark) {
+  if (isDark) return "#f1f5f9";
+  var intensity = Math.min(value / Math.max(max, 1), 1);
+  if (intensity < 0.6) return "#065f46";
+  if (intensity < 0.8) return "#92400e";
+  return "#991b1b";
+}
+
+function TreeNode(props) {
+  var node = props.node;
+  var depth = props.depth;
+  var selectedName = props.selectedName;
+  var onSelect = props.onSelect;
+  var expanded = props.expanded;
+  var setExpanded = props.setExpanded;
+  var expandedMap = props.expandedMap;
+  var s = props.styles;
+  var mode = props.colorMode;
+
+  var hasChildren = node.children && node.children.length > 0;
+  var isSelected = selectedName === node.name;
+  var indent = depth * 20;
+
+  var bg, color;
+  if (isSelected) {
+    bg = "var(--bg-selected, #1e3a5f)";
+    color = "var(--text-accent, #38bdf8)";
+  } else if (node.didRender) {
+    bg = "var(--bg-tree-render, #422006)";
+    color = "var(--text-warning, #fbbf24)";
+  } else {
+    bg = "transparent";
+    color = "var(--text-primary, #0f172a)";
+  }
+
+  return React.createElement("div", null,
+    React.createElement("div", {
+      tabIndex: 0,
+      role: "button",
+      style: {
+        marginLeft: indent + "px",
+        padding: "6px 10px",
+        background: bg,
+        color: color,
+        marginBottom: "4px",
+        borderRadius: "6px",
+        cursor: "pointer",
+        display: "flex",
+        alignItems: "center",
+        gap: "8px",
+        transition: "background 0.15s",
+      },
+      onClick: function () { onSelect(node.name); },
+      onKeyDown: function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(node.name); } },
+    },
+      hasChildren
+        ? React.createElement("button", {
+            style: { background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex", color: color },
+            onClick: function (e) { e.stopPropagation(); setExpanded(!expanded); },
+          },
+          expanded ? React.createElement(ChevronDown, { size: 14 }) : React.createElement(ChevronRight, { size: 14 }))
+        : React.createElement(Square, { size: 14 }),
+      getCauseIcon(node.causeType),
+      React.createElement("span", { style: { fontFamily: "'JetBrains Mono', monospace", fontWeight: 500, flex: 1, fontSize: "12px" } }, node.name),
+      getScoreIcon(node.score),
+      React.createElement("span", { style: { fontSize: "11px", color: color, opacity: 0.7 } }, String(node.renderCount)),
+    ),
+    hasChildren && expanded
+      ? React.createElement("div", null,
+          (node.children || []).map(function (child) {
+            return React.createElement(TreeNode, {
+              key: child.key || child.name,
+              node: child,
+              depth: depth + 1,
+              selectedName: selectedName,
+              onSelect: onSelect,
+              expanded: expandedMap && expandedMap[child.key || child.name],
+              setExpanded: setExpanded,
+              expandedMap: expandedMap,
+              styles: s,
+              colorMode: mode,
+            });
+          })
+        )
+      : null
+  );
+}
+
+export default function App() {
+  var _useState = useState("light");
+  var colorMode = _useState[0];
+  var setColorMode = _useState[1];
+  var _useState2 = useState(null);
+  var selectedComponent = _useState2[0];
+  var setSelectedComponent = _useState2[1];
+  var _useState3 = useState([]);
+  var recentUpdates = _useState3[0];
+  var setRecentUpdates = _useState3[1];
+  var _useState4 = useState([]);
+  var globalStats = _useState4[0];
+  var setGlobalStats = _useState4[1];
+  var _useState5 = useState(null);
+  var componentTree = _useState5[0];
+  var setComponentTree = _useState5[1];
+  var _useState6 = useState([]);
+  var timeline = _useState6[0];
+  var setTimeline = _useState6[1];
+  var _useState7 = useState("table");
+  var viewMode = _useState7[0];
+  var setViewMode = _useState7[1];
+  var _useState8 = useState(0);
+  var timelineIndex = _useState8[0];
+  var setTimelineIndex = _useState8[1];
+  var _useState9 = useState([]);
+  var autoInsights = _useState9[0];
+  var setAutoInsights = _useState9[1];
+  var _useState10 = useState(sidebarDefault);
+  var sidebarWidth = _useState10[0];
+  var setSidebarWidth = _useState10[1];
+  var _useState11 = useState(false);
+  var isResizing = _useState11[0];
+  var setIsResizing = _useState11[1];
+  var _useState12 = useState(false);
+  var isConnected = _useState12[0];
+  var setIsConnected = _useState12[1];
+  var _useState13 = useState("");
+  var searchQuery = _useState13[0];
+  var setSearchQuery = _useState13[1];
+  var _useState14 = useState("all");
+  var patternFilter = _useState14[0];
+  var setPatternFilter = _useState14[1];
+  var _useState15 = useState(false);
+  var showResetMenu = _useState15[0];
+  var setShowResetMenu = _useState15[1];
+  var _useState16 = useState({});
+  var treeExpanded = _useState16[0];
+  var setTreeExpanded = _useState16[1];
+  var _useState17 = useState(false);
+  var liveFeedExpanded = _useState17[0];
+  var setLiveFeedExpanded = _useState17[1];
+
+  var _useReducer = useReducer(componentsReducer, {});
+  var components = _useReducer[0];
+  var dispatch = _useReducer[1];
+
+  var insightsTimerRef = useRef(null);
+  var updatesRef = useRef([]);
+  var searchRef = useRef(null);
+  var themeStyleRef = useRef(null);
+
+  var s = useMemo(function () {
+    return createStyles(colorMode);
+  }, [colorMode]);
+
+  var heatmap = useMemo(function () {
+    return colorMode === "dark"
+      ? ["#064e3b", "#065f46", "#78350f", "#7c2d12", "#7f1d1d"]
+      : ["#ecfdf5", "#d1fae5", "#fef3c7", "#fed7aa", "#fecaca"];
+  }, [colorMode]);
+
+  function applyThemeVars(mode) {
+    var t = themeMap[mode] || themeMap.light;
+    if (!themeStyleRef.current) {
+      var style = document.createElement("style");
+      style.id = "rt-theme";
+      document.head.appendChild(style);
+      themeStyleRef.current = style;
+    }
+    themeStyleRef.current.textContent = ":root { --bg-app: " + t.bg.app + "; --bg-surface: " + t.bg.surface + "; --bg-header: " + t.bg.header + "; --bg-sidebar: " + t.bg.sidebar + "; --bg-hover: " + t.bg.hover + "; --bg-selected: " + t.bg.selected + "; --bg-insight: " + t.bg.insight + "; --bg-insight-critical: " + t.bg.insightCritical + "; --bg-tree-render: " + t.bg.treeRender + "; --bg-card: " + t.bg.card + "; --text-primary: " + t.text.primary + "; --text-secondary: " + t.text.secondary + "; --text-muted: " + t.text.muted + "; --text-accent: " + t.text.accent + "; --text-danger: " + t.text.danger + "; --text-warning: " + t.text.warning + "; --text-success: " + t.text.success + "; --border: " + t.border + "; --accent: " + t.accent + "; }";
+  }
+
+  useEffect(function () {
+    applyThemeVars(colorMode);
+  }, [colorMode]);
+
+  useEffect(function () {
+    var mq;
+    function onThemeChange(isDark) {
+      setColorMode(isDark ? "dark" : "light");
+    }
+
+    try {
+      if (chrome.devtools && chrome.devtools.panels && chrome.devtools.panels.themeName) {
+        setColorMode(chrome.devtools.panels.themeName === "dark" ? "dark" : "light");
+      } else {
+        mq = window.matchMedia("(prefers-color-scheme: dark)");
+        onThemeChange(mq.matches);
+        mq.addEventListener("change", function (e) { onThemeChange(e.matches); });
       }
-      setIsConnected(true);
+    } catch (e) {
+      mq = window.matchMedia("(prefers-color-scheme: dark)");
+      onThemeChange(mq.matches);
+    }
 
-      port.onMessage.addListener((message) => {
-        try {
-          if (message?.type !== "FOR_DEVTOOLS" || !message.payload) return;
+    var port;
 
-          const payload = message.payload;
-          const updates = payload.currentCommitUpdates;
-          if (!Array.isArray(updates)) return;
+    function initFromWindow() {
+      if (window.portPromise) {
+        window.portPromise.then(function (p) {
+          port = p;
+          setIsConnected(true);
 
-          const tree = payload.componentTree;
-          const timelineData = payload.timeline || [];
-          const stats = payload.globalStats || [];
+          port.onMessage.addListener(function (message) {
+            try {
+              if (!message || message.type !== "FOR_DEVTOOLS" || !message.payload) return;
 
-          setComponents((prev) => {
-            const next = { ...prev };
+              var payload = message.payload;
+              var updates = payload.currentCommitUpdates;
+              if (!Array.isArray(updates)) return;
 
-            updates.forEach((u) => {
-            if (!next[u.name]) {
-              next[u.name] = {
-                renders: 0,
-                total: 0,
-                exclusive: 0,
-                lastChanges: [],
-                history: [],
-                maxExclusive: 0,
-                patterns: [],
-                propDiff: [],
-                causeChain: [],
-                rootIndex: -1,
-                rootCause: null,
-                predictions: [],
-                confidence: null,
-                score: 0,
-                scoreLabel: { emoji: "⚪", label: "Low" },
-              };
-            }
+              var tree = payload.componentTree;
+              var timelineData = payload.timeline || [];
+              var stats = payload.globalStats || [];
 
-            next[u.name].renders += 1;
-            next[u.name].total += u.total;
-            next[u.name].exclusive += u.exclusive;
-            next[u.name].lastChanges = u.changes;
-            next[u.name].propDiff = u.propDiff || [];
-            next[u.name].patterns = u.patterns || [];
-            next[u.name].causeChain = u.causeChain || [];
-            next[u.name].rootIndex = u.rootIndex ?? -1;
-            next[u.name].rootCause = u.rootCause || null;
-            next[u.name].predictions = u.predictions || [];
-            next[u.name].confidence = u.confidence || null;
-            next[u.name].score = u.score || 0;
-            next[u.name].scoreLabel = u.scoreLabel || {
-              emoji: "⚪",
-              label: "Low",
-            };
-            next[u.name].maxExclusive = Math.max(
-              next[u.name].maxExclusive,
-              u.exclusive,
-            );
+              dispatch({ type: "UPDATE", updates: updates });
 
-            next[u.name].history.push({
-              timestamp: u.timestamp,
-              exclusive: u.exclusive,
-              total: u.total,
-              changes: u.changes,
-              propDiff: u.propDiff,
-              commitId: u.commitId,
-            });
+              updatesRef.current = updates;
 
-              if (next[u.name].history.length > 10) {
-                next[u.name].history.shift();
+              setRecentUpdates(function (prev) {
+                var newUpdates = [];
+                for (var i = 0; i < updates.length; i++) {
+                  newUpdates.push({
+                    ...updates[i],
+                    id: updates[i].name + "-" + Date.now() + "-" + Math.random(),
+                  });
+                }
+                return newUpdates.concat(prev).slice(0, recentUpdatesMax);
+              });
+
+              if (tree) setComponentTree(tree);
+              if (timelineData.length > 0) {
+                setTimeline(timelineData);
+                setTimelineIndex(timelineData.length - 1);
               }
-            });
+              if (stats.length > 0) setGlobalStats(stats);
 
-            return next;
+              if (insightsTimerRef.current) clearTimeout(insightsTimerRef.current);
+              insightsTimerRef.current = setTimeout(function () {
+                generateInsights(updates);
+              }, insightsDebounceMs);
+            } catch (e) {
+              console.error("[App] Message handler error:", e);
+            }
           });
+        });
+      }
+    }
 
-          setRecentUpdates((prev) => {
-            const newUpdates = updates.map((u) => ({
-              ...u,
-              id: `${u.name}-${Date.now()}-${Math.random()}`,
-            }));
-            return [...newUpdates, ...prev].slice(0, 20);
-          });
+    initFromWindow();
 
-          if (tree) setComponentTree(tree);
-          if (timelineData.length > 0) {
-            setTimeline(timelineData);
-            setTimelineIndex(timelineData.length - 1);
-          }
-          if (stats.length > 0) setGlobalStats(stats);
-
-          generateAutoInsights(updates);
-        } catch (e) {
-          console.error("[App] Message handler error:", e);
-        }
-      });
-    });
+    return function () {
+      if (insightsTimerRef.current) clearTimeout(insightsTimerRef.current);
+      if (mq && typeof mq.removeEventListener === "function") {
+        mq.removeEventListener("change", onThemeChange);
+      }
+    };
   }, []);
 
-  // Auto Insights (Enhanced with new patterns)
-  const generateAutoInsights = (updates) => {
-    const insights = [];
-
-    updates.forEach((u) => {
-      // Wasted Chain (CRITICAL)
-      const wastedChain = u.patterns?.find((p) => p.type === "wasted-chain");
-      if (wastedChain) {
-        insights.push({
-          type: "wasted-chain",
-          severity: "critical",
-          component: u.name,
-          message: `🔥 ENTIRE ${wastedChain.chainLength}-level chain is wasted re-renders`,
-          suggestion: wastedChain.suggestion,
-          confidence: wastedChain.confidence,
-          impact: wastedChain.impact,
-          timestamp: Date.now(),
-        });
-      }
-
-      // Context Explosion
-      const contextExplosion = u.patterns?.find(
-        (p) => p.type === "context-explosion",
-      );
-      if (contextExplosion) {
-        insights.push({
-          type: "context-explosion",
-          severity: "critical",
-          component: u.name,
-          message: `🌐 Context in ${contextExplosion.rootComponent} caused ${contextExplosion.affectedComponents} downstream re-renders`,
-          suggestion: contextExplosion.suggestion,
-          confidence: contextExplosion.confidence,
-          impact: contextExplosion.impact,
-          timestamp: Date.now(),
-        });
-      }
-
-      // Prop Cascade
-      const propCascade = u.patterns?.find((p) => p.type === "prop-cascade");
-      if (propCascade) {
-        insights.push({
-          type: "prop-cascade",
-          severity: "high",
-          component: u.name,
-          message: `🔁 Prop drilling: ${propCascade.props.join(", ")} through ${propCascade.depth} levels`,
-          suggestion: propCascade.suggestion,
-          confidence: propCascade.confidence,
-          impact: propCascade.impact,
-          timestamp: Date.now(),
-        });
-      }
-
-      // Unstable functions
-      const funcPattern = u.patterns?.find(
-        (p) => p.type === "unstable-function-prop",
-      );
-      if (funcPattern) {
-        insights.push({
-          type: "unstable-function",
-          severity: "high",
-          component: u.name,
-          message: `Function props ${funcPattern.props.join(", ")} change every render`,
-          suggestion: funcPattern.suggestion,
-          confidence: funcPattern.confidence,
-          impact: funcPattern.impact,
-          timestamp: Date.now(),
-        });
-      }
-
-      // Deep propagation
-      const deepPattern = u.patterns?.find(
-        (p) => p.type === "deep-propagation",
-      );
-      if (deepPattern) {
-        insights.push({
-          type: "deep-propagation",
-          severity: "high",
-          component: u.name,
-          message: `${deepPattern.chainLength}-level propagation chain`,
-          suggestion: deepPattern.suggestion,
-          confidence: deepPattern.confidence,
-          impact: deepPattern.impact,
-          timestamp: Date.now(),
-        });
-      }
-    });
-
-    setAutoInsights((prev) => {
-      const combined = [...insights, ...prev];
-      const seen = new Set();
-      const unique = combined.filter((insight) => {
-        const key = `${insight.component}-${insight.type}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-      return unique.slice(0, 10);
-    });
-  };
-
-  // Reset functionality
-  const handleReset = () => {
-    if (
-      window.confirm(
-        "Reset all tracking data? This will clear all stats and history.",
-      )
-    ) {
-      setComponents({});
-      setRecentUpdates([]);
-      setAutoInsights([]);
-      setTimeline([]);
-      setComponentTree(null);
-      setSelectedComponent(null);
-      console.log("[App.jsx] Data reset");
-    }
-  };
-
-  const sortedComponents = useMemo(() => {
-    const entries = Object.entries(components);
-
-    switch (sortBy) {
-      case "score":
-        return entries.sort((a, b) => b[1].score - a[1].score);
-      case "exclusive":
-        return entries.sort((a, b) => b[1].exclusive - a[1].exclusive);
-      case "renders":
-        return entries.sort((a, b) => b[1].renders - a[1].renders);
-      case "total":
-        return entries.sort((a, b) => b[1].total - a[1].total);
-      case "name":
-        return entries.sort((a, b) => a[0].localeCompare(b[0]));
-      default:
-        return entries;
-    }
-  }, [components, sortBy]);
-
-  const maxExclusive = useMemo(() => {
-    return Math.max(...Object.values(components).map((c) => c.exclusive), 1);
-  }, [components]);
-
-  const maxRenders = useMemo(() => {
-    return Math.max(...Object.values(components).map((c) => c.renders), 1);
-  }, [components]);
-
-  const maxScore = useMemo(() => {
-    return Math.max(...Object.values(components).map((c) => c.score), 1);
-  }, [components]);
-
-  const getHeatmapColor = (value, max) => {
-    const intensity = Math.min(value / max, 1);
-    if (intensity < 0.2) return "#ecfdf5";
-    if (intensity < 0.4) return "#d1fae5";
-    if (intensity < 0.6) return "#fef3c7";
-    if (intensity < 0.8) return "#fed7aa";
-    return "#fecaca";
-  };
-
-  const getTextColor = (value, max) => {
-    const intensity = Math.min(value / max, 1);
-    if (intensity < 0.6) return "#065f46";
-    if (intensity < 0.8) return "#92400e";
-    return "#991b1b";
-  };
-
-  const getCauseIcon = (causeType) => {
-    switch (causeType) {
-      case "state":
-        return "🧠";
-      case "props":
-        return "🔁";
-      case "context":
-        return "🌐";
-      case "parent":
-        return "⬆️";
-      default:
-        return "❓";
-    }
-  };
-
-  const formatRenderCauses = (changes) => {
-    if (!changes || changes.length === 0) return "Parent re-render";
-
-    return changes
-      .map((c) => {
-        if (c.type === "props" && c.keys) {
-          return `Props: ${c.keys.join(", ")}`;
+  useEffect(function () {
+    function onKeyDown(e) {
+      if (e.key === "/" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        var tag = document.activeElement && document.activeElement.tagName;
+        if (tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT") {
+          e.preventDefault();
+          if (searchRef.current) searchRef.current.focus();
         }
-        if (c.type === "state") return "State changed";
-        if (c.type === "context") return "Context changed";
-        if (c.type === "parent") return "Parent re-render";
-        return c.type;
-      })
-      .join(" • ");
-  };
-
-  // Flamegraph
-  useEffect(() => {
-    if (
-      viewMode === "flamegraph" &&
-      canvasRef.current &&
-      sortedComponents.length > 0
-    ) {
-      drawFlamegraph();
+      }
     }
-  }, [viewMode, sortedComponents]);
+    document.addEventListener("keydown", onKeyDown);
+    return function () { document.removeEventListener("keydown", onKeyDown); };
+  }, []);
 
-  const drawFlamegraph = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+  function generateInsights(updates) {
+    var insights = [];
+    for (var i = 0; i < updates.length; i++) {
+      var u = updates[i];
+      var rules = evaluateRules(u, null);
+      for (var j = 0; j < rules.length; j++) {
+        var r = rules[j];
+        insights.push({
+          key: u.name + "-" + r.id,
+          type: r.id,
+          severity: r.severity,
+          component: u.name,
+          category: r.categoryName,
+          message: r.message,
+          suggestion: r.suggestion,
+          impact: r.impact,
+          confidence: r.confidence,
+          timestamp: Date.now(),
+        });
+      }
+    }
 
-    const ctx = canvas.getContext("2d");
-    const width = canvas.width;
-    const height = canvas.height;
-
-    ctx.clearRect(0, 0, width, height);
-
-    const barHeight = 25;
-    const totalScore = sortedComponents.reduce(
-      (sum, [, stats]) => sum + stats.score,
-      1,
-    );
-
-    let yOffset = 10;
-
-    sortedComponents.forEach(([name, stats]) => {
-      const barWidth = Math.max((stats.score / totalScore) * (width - 40), 20);
-      const x = 20;
-      const y = yOffset;
-
-      const intensity = stats.score / maxScore;
-      let color = "#10b981";
-      if (intensity > 0.7) color = "#ef4444";
-      else if (intensity > 0.4) color = "#f59e0b";
-
-      ctx.fillStyle = color;
-      ctx.fillRect(x, y, barWidth, barHeight);
-
-      ctx.fillStyle = "#000";
-      ctx.font = "12px monospace";
-      const text = `${name} (${stats.score})`;
-      ctx.fillText(text, x + 5, y + 17);
-
-      yOffset += barHeight + 5;
+    setAutoInsights(function (prev) {
+      var combined = insights.concat(prev);
+      var seen = {};
+      var unique = [];
+      for (var i = 0; i < combined.length; i++) {
+        if (seen[combined[i].key]) continue;
+        seen[combined[i].key] = true;
+        unique.push(combined[i]);
+      }
+      return unique.slice(0, 20);
     });
-  };
+  }
 
-  // Component Tree Renderer
-  const renderComponentTree = (node, depth = 0) => {
-    if (!node) return null;
-    if (Array.isArray(node)) {
-      return node.map((n, i) => renderComponentTree(n, depth));
+  var allPatternTypes = useMemo(function () {
+    var types = { all: true };
+    var entries = Object.entries(components);
+    for (var i = 0; i < entries.length; i++) {
+      var stats = entries[i][1];
+      if (stats.patterns) {
+        for (var j = 0; j < stats.patterns.length; j++) {
+          types[stats.patterns[j].type] = true;
+        }
+      }
+    }
+    return Object.keys(types);
+  }, [components]);
+
+  var sortedComponents = useMemo(function () {
+    var entries = Object.entries(components);
+    var result = [];
+    for (var i = 0; i < entries.length; i++) {
+      var name = entries[i][0];
+      var stats = entries[i][1];
+      if (searchQuery && name.toLowerCase().indexOf(searchQuery.toLowerCase()) === -1) continue;
+      if (patternFilter !== "all" && (!stats.patterns || !stats.patterns.some(function (p) { return p.type === patternFilter; }))) continue;
+      result.push([name, stats]);
+    }
+    result.sort(function (a, b) { return b[1].score - a[1].score; });
+    for (var i = 0; i < result.length; i++) {
+      result[i][1]._rules = evaluateRules(result[i][1], result[i][1]);
+    }
+    return result;
+  }, [components, searchQuery, patternFilter]);
+
+  var maxScore = useMemo(function () {
+    var m = 0;
+    for (var i = 0; i < sortedComponents.length; i++) {
+      if (sortedComponents[i][1].score > m) m = sortedComponents[i][1].score;
+    }
+    return m;
+  }, [sortedComponents]);
+
+  var maxRenders = useMemo(function () {
+    var m = 0;
+    for (var i = 0; i < sortedComponents.length; i++) {
+      if (sortedComponents[i][1].renders > m) m = sortedComponents[i][1].renders;
+    }
+    return m;
+  }, [sortedComponents]);
+
+  var maxExclusive = useMemo(function () {
+    var m = 0;
+    for (var i = 0; i < sortedComponents.length; i++) {
+      if (sortedComponents[i][1].exclusive > m) m = sortedComponents[i][1].exclusive;
+    }
+    return m;
+  }, [sortedComponents]);
+
+  var selectedData = useMemo(function () {
+    if (!selectedComponent) return null;
+    return components[selectedComponent] || null;
+  }, [components, selectedComponent]);
+
+  var matchedRules = useMemo(function () {
+    if (!selectedData) return [];
+    return evaluateRules(selectedData, selectedData);
+  }, [selectedData]);
+
+  var handleExport = useCallback(function () {
+    var data = {
+      exportedAt: new Date().toISOString(),
+      components: components,
+      timeline: timeline,
+      globalStats: globalStats,
+      autoInsights: autoInsights,
+    };
+    var blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = "render-data-" + Date.now() + ".json";
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [components, timeline, globalStats, autoInsights]);
+
+  var handleResetPartial = useCallback(function (type) {
+    setShowResetMenu(false);
+    switch (type) {
+      case "all":
+        dispatch({ type: "RESET" });
+        setRecentUpdates([]);
+        setAutoInsights([]);
+        setTimeline([]);
+        setComponentTree(null);
+        setSelectedComponent(null);
+        break;
+      case "timeline":
+        setTimeline([]);
+        setTimelineIndex(0);
+        break;
+      case "insights":
+        setAutoInsights([]);
+        break;
+    }
+  }, []);
+
+  var handleMouseDown = useCallback(function (e) {
+    e.preventDefault();
+    setIsResizing(true);
+    var startX = e.clientX;
+    var startWidth = sidebarWidth;
+
+    function onMouseMove(e2) {
+      var newWidth = startWidth - (e2.clientX - startX);
+      if (newWidth < 350) newWidth = 350;
+      if (newWidth > 800) newWidth = 800;
+      setSidebarWidth(newWidth);
     }
 
-    const indent = depth * 20;
-    const hasChildren = node.children && node.children.length > 0;
+    function onMouseUp() {
+      setIsResizing(false);
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    }
 
-    return (
-      <div key={`${node.name}-${node.key}-${depth}`}>
-        <div
-          style={{
-            marginLeft: `${indent}px`,
-            padding: "6px 10px",
-            background: node.didRender ? "#fef3c7" : "#f9fafb",
-            borderLeft: node.didRender
-              ? "3px solid #f59e0b"
-              : "3px solid #d1d5db",
-            marginBottom: "4px",
-            borderRadius: "4px",
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-            transition: "background 0.15s",
-          }}
-          onClick={() => setSelectedComponent(node.name)}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = node.didRender
-              ? "#fde68a"
-              : "#f3f4f6";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = node.didRender
-              ? "#fef3c7"
-              : "#f9fafb";
-          }}
-        >
-          <span style={{ width: "16px" }}>{hasChildren ? "▼" : "▪️"}</span>
-          <span style={{ width: "20px", fontSize: "14px" }}>
-            {getCauseIcon(node.causeType)}
-          </span>
-          <span style={{ fontFamily: "monospace", fontWeight: 500, flex: 1 }}>
-            {node.name}
-          </span>
-          <span style={{ fontSize: "16px" }}>{node.scoreLabel.emoji}</span>
-          <span style={{ fontSize: "11px", color: "#6b7280" }}>
-            {node.renderCount}
-          </span>
-        </div>
-        {hasChildren && (
-          <div>
-            {node.children.map((child) =>
-              renderComponentTree(child, depth + 1),
-            )}
-          </div>
-        )}
-      </div>
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  }, [sidebarWidth]);
+
+  function renderEmptyState(icon, title, subtitle) {
+    return React.createElement("div", { style: s.emptyState },
+      icon,
+      React.createElement("p", null, title),
+      subtitle ? React.createElement("p", { style: { fontSize: "11px", marginTop: "8px" } }, subtitle) : null
     );
-  };
+  }
 
-  // Timeline
-  const currentTimelineEntry = useMemo(() => {
-    if (
-      timeline.length === 0 ||
-      timelineIndex < 0 ||
-      timelineIndex >= timeline.length
-    ) {
-      return null;
-    }
-    return timeline[timelineIndex];
-  }, [timeline, timelineIndex]);
-
-  const renderTimeline = () => {
-    if (timeline.length === 0) {
-      return (
-        <div style={{ padding: "40px", textAlign: "center", color: "#9ca3af" }}>
-          <div style={{ fontSize: "48px", marginBottom: "16px" }}>⏳</div>
-          <p>No timeline data yet</p>
-        </div>
+  function renderTableView() {
+    if (sortedComponents.length === 0) {
+      return renderEmptyState(
+        React.createElement(Clock, { size: 48 }),
+        "No render data yet",
+        "Interact with your React app — click buttons, navigate, update state"
       );
     }
 
-    return (
-      <div
-        style={{
-          padding: "16px",
-          height: "100%",
-          display: "flex",
-          flexDirection: "column",
-        }}
-      >
-        <div style={{ marginBottom: "16px" }}>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              marginBottom: "8px",
-            }}
-          >
-            <label
-              style={{ fontSize: "12px", color: "#6b7280", fontWeight: 600 }}
-            >
-              Commit {currentTimelineEntry?.commitId || timelineIndex + 1} of{" "}
-              {timeline.length}
-            </label>
-            <span style={{ fontSize: "11px", color: "#9ca3af" }}>
-              {currentTimelineEntry
-                ? new Date(currentTimelineEntry.timestamp).toLocaleTimeString()
-                : ""}
-            </span>
-          </div>
-          <input
-            type="range"
-            min="0"
-            max={timeline.length - 1}
-            value={timelineIndex}
-            onChange={(e) => setTimelineIndex(parseInt(e.target.value))}
-            style={{ width: "100%", cursor: "pointer" }}
-          />
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              fontSize: "10px",
-              color: "#9ca3af",
-              marginTop: "4px",
-            }}
-          >
-            <span>Oldest</span>
-            <span>Latest</span>
-          </div>
-        </div>
-
-        {currentTimelineEntry && (
-          <div style={{ flex: 1, overflow: "auto" }}>
-            <div
-              style={{
-                padding: "12px",
-                background: "white",
-                border: "1px solid #e5e7eb",
-                borderRadius: "6px",
-                marginBottom: "16px",
-              }}
-            >
-              <h4
-                style={{
-                  margin: "0 0 12px 0",
-                  fontSize: "13px",
-                  fontWeight: 600,
-                }}
-              >
-                Components Rendered ({currentTimelineEntry.updates.length})
-              </h4>
-              <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                {currentTimelineEntry.updates.map((u, i) => (
-                  <div
-                    key={i}
-                    onClick={() => setSelectedComponent(u.name)}
-                    style={{
-                      padding: "6px 10px",
-                      background: "#f9fafb",
-                      border: "1px solid #e5e7eb",
-                      borderRadius: "4px",
-                      fontSize: "11px",
-                      fontFamily: "monospace",
-                      cursor: "pointer",
-                      transition: "background 0.15s",
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = "#f3f4f6";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = "#f9fafb";
-                    }}
-                  >
-                    <div style={{ fontWeight: 600, marginBottom: "4px" }}>
-                      {u.scoreLabel.emoji} {u.name}
-                    </div>
-                    <div style={{ color: "#6b7280", fontSize: "10px" }}>
-                      Exclusive: {u.exclusive} • {formatRenderCauses(u.changes)}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {currentTimelineEntry.componentTree && (
-              <div>
-                <h4
-                  style={{
-                    margin: "0 0 12px 0",
-                    fontSize: "13px",
-                    fontWeight: 600,
-                  }}
-                >
-                  Component Tree (This Commit)
-                </h4>
-                <div
-                  style={{
-                    background: "white",
-                    padding: "12px",
-                    border: "1px solid #e5e7eb",
-                    borderRadius: "6px",
-                  }}
-                >
-                  {renderComponentTree(currentTimelineEntry.componentTree)}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+    return React.createElement("table", { style: s.table },
+      React.createElement("thead", null,
+        React.createElement("tr", null,
+          React.createElement("th", { style: s.th }, "Component"),
+          React.createElement("th", { style: s.thCenter }, "Score"),
+          React.createElement("th", { style: s.thRight }, "Renders"),
+          React.createElement("th", { style: s.thRight, title: "Renders unique to this component, excluding children" }, "Exclusive"),
+          React.createElement("th", { style: s.thCenter }, "Root"),
+          React.createElement("th", { style: s.th }, "Patterns"),
+        )
+      ),
+      React.createElement("tbody", null,
+        sortedComponents.map(function (entry) {
+          var name = entry[0];
+          var stats = entry[1];
+          var isSelected = selectedComponent === name;
+          return React.createElement("tr", {
+            key: name,
+            tabIndex: 0,
+            role: "button",
+            onClick: function () { setSelectedComponent(name); },
+            onKeyDown: function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelectedComponent(name); } },
+            style: s.tableRow(isSelected),
+          },
+            React.createElement("td", { style: { ...s.tdMono, fontWeight: 500, color: isSelected ? "var(--text-accent, #38bdf8)" : undefined } }, name),
+            React.createElement("td", { style: { ...s.td, textAlign: "center", fontSize: "16px" } },
+              React.createElement(getScoreLabel(stats.score).icon, { size: ICON_SIZE })
+            ),
+            React.createElement("td", { style: { ...s.td, textAlign: "right", background: getHeatmapColor(stats.renders, maxRenders, heatmap), color: getTextColor(stats.renders, maxRenders, colorMode === "dark"), fontWeight: 500 } }, String(stats.renders)),
+            React.createElement("td", { style: { ...s.td, textAlign: "right", background: getHeatmapColor(stats.exclusive, maxExclusive, heatmap), color: getTextColor(stats.exclusive, maxExclusive, colorMode === "dark"), fontWeight: 600 } }, String(stats.exclusive)),
+            React.createElement("td", { style: { ...s.td, textAlign: "center", fontSize: "16px" } },
+              stats.rootCause ? getCauseIcon(stats.rootCause.causeType) : React.createElement("span", null, "\u2014")
+            ),
+            React.createElement("td", { style: { ...s.td, fontSize: "11px" } },
+              stats._rules && stats._rules.length > 0
+                ? React.createElement("div", { style: { display: "flex", gap: "4px", flexWrap: "wrap" } },
+                    stats._rules.slice(0, 2).map(function (r, i) {
+                      return React.createElement("span", { key: i, style: s.chip(r.severity) }, r.id);
+                    })
+                  )
+                : React.createElement("span", { style: { color: "var(--text-muted, #94a3b8)" } }, "\u2014")
+            )
+          );
+        })
+      )
     );
-  };
+  }
 
-  // Resize handler
-  const handleMouseDown = () => setIsResizing(true);
+  function renderTreeView() {
+    if (!componentTree) {
+      return renderEmptyState(
+        React.createElement(GitBranch, { size: 48 }),
+        "No component tree data yet"
+      );
+    }
+    return React.createElement("div", { style: { padding: "16px" } },
+      React.createElement("h3", { style: s.sectionTitle },
+        React.createElement(GitBranch, { size: ICON_SIZE }),
+        " Component Tree"
+      ),
+      React.createElement(TreeNode, {
+        node: componentTree,
+        depth: 0,
+        selectedName: selectedComponent,
+        onSelect: setSelectedComponent,
+        expanded: treeExpanded[componentTree.key || componentTree.name],
+        setExpanded: function (val) {
+          var key = componentTree.key || componentTree.name;
+          setTreeExpanded(function (prev) { return { ...prev, [key]: val }; });
+        },
+        expandedMap: treeExpanded,
+        styles: s,
+        colorMode: colorMode,
+      })
+    );
+  }
 
-  useEffect(() => {
-    const handleMouseMove = (e) => {
-      if (!isResizing) return;
-      const newWidth = window.innerWidth - e.clientX;
-      setSidebarWidth(Math.max(350, Math.min(800, newWidth)));
-    };
+  function renderFlamegraphView() {
+    if (sortedComponents.length === 0) {
+      return renderEmptyState(
+        React.createElement("p", null, "No data to visualize")
+      );
+    }
+    return React.createElement("div", { style: { padding: "16px" } },
+      React.createElement("h3", { style: s.sectionTitle },
+        React.createElement(BarChart3, { size: ICON_SIZE }),
+        " Flamegraph (by Render Score)"
+      ),
+      React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: "4px" } },
+        sortedComponents.map(function (entry) {
+          var name = entry[0];
+          var stats = entry[1];
+          var pct = (stats.score / Math.max(maxScore, 1)) * 100;
+          var intensity = stats.score / Math.max(maxScore, 1);
+          var color = intensity > 0.7 ? "var(--text-danger, #ef4444)" : intensity > 0.4 ? "var(--text-warning, #f59e0b)" : "var(--text-success, #22c55e)";
+          return React.createElement("div", {
+            key: name,
+            onClick: function () { setSelectedComponent(name); },
+            role: "button",
+            tabIndex: 0,
+            title: name + ": score " + stats.score,
+            style: { cursor: "pointer" },
+            onKeyDown: function (e) { if (e.key === "Enter") setSelectedComponent(name); },
+          },
+            React.createElement("div", {
+              style: s.flamegraphBar(pct, color),
+              onMouseEnter: function (e) { e.currentTarget.style.opacity = "0.8"; },
+              onMouseLeave: function (e) { e.currentTarget.style.opacity = "1"; },
+            },
+              React.createElement("span", { style: { color: "#fff", fontSize: "11px", fontWeight: 600, fontFamily: "'JetBrains Mono', 'Fira Code', monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+                name + " (" + stats.score + ")"
+              )
+            )
+          );
+        })
+      )
+    );
+  }
 
-    const handleMouseUp = () => setIsResizing(false);
+  function renderTimelineView() {
+    if (timeline.length === 0) {
+      return renderEmptyState(
+        React.createElement(Clock, { size: 48 }),
+        "No timeline data yet"
+      );
+    }
+    return React.createElement("div", { style: { padding: "16px" } },
+      React.createElement("h3", { style: s.sectionTitle },
+        React.createElement(Clock, { size: ICON_SIZE }),
+        " Render Timeline"
+      ),
+      React.createElement("div", { style: s.spaceY(6) },
+        timeline.map(function (entry, idx) {
+          return React.createElement("div", { key: idx, style: s.timelineEntry },
+            React.createElement("div", { style: s.flexRow },
+              React.createElement("span", { style: { fontWeight: 600 } }, "Commit #" + entry.commitId),
+              React.createElement("span", { style: { color: "var(--text-secondary, #64748b)" } }, new Date(entry.timestamp).toLocaleTimeString())
+            ),
+            React.createElement("div", { style: { color: "var(--text-secondary, #64748b)", marginTop: "4px" } },
+              entry.updates.length + " component" + (entry.updates.length !== 1 ? "s" : "") + " updated"
+            ),
+            entry.updates.length > 0
+              ? React.createElement("div", { style: { display: "flex", gap: "4px", flexWrap: "wrap", marginTop: "6px" } },
+                  entry.updates.slice(0, 10).map(function (u, i) {
+                    var pillBg = u.exclusive > 10 ? "var(--bg-insight-critical, #450a0a)" : u.exclusive > 5 ? "var(--bg-insight, #422006)" : "var(--bg-surface, #1e293b)";
+                    var pillColor = u.exclusive > 10 ? "var(--text-danger, #f87171)" : u.exclusive > 5 ? "var(--text-warning, #fbbf24)" : "var(--text-secondary, #94a3b8)";
+                    return React.createElement("span", {
+                      key: i,
+                      onClick: function () { setSelectedComponent(u.name); },
+                      style: s.pill(pillBg, pillColor),
+                    }, u.name + " (" + u.exclusive + ")");
+                  }),
+                  entry.updates.length > 10
+                    ? React.createElement("span", { style: { fontSize: "10px", color: "var(--text-muted, #94a3b8)", alignSelf: "center" } }, "+" + (entry.updates.length - 10) + " more")
+                    : null
+                )
+              : null
+          );
+        })
+      )
+    );
+  }
 
-    if (isResizing) {
-      document.addEventListener("mousemove", handleMouseMove);
-      document.addEventListener("mouseup", handleMouseUp);
+  function renderDetailPanel() {
+    if (!selectedData) {
+      return React.createElement("div", { style: { padding: "24px", textAlign: "center", color: "var(--text-muted, #94a3b8)" } },
+        React.createElement(MousePointer2, { size: 28, style: { margin: "0 auto 8px", display: "block", opacity: 0.5 } }),
+        React.createElement("div", { style: { fontSize: "11px" } }, "Select a component"),
+        React.createElement("div", { style: { fontSize: "10px", marginTop: "4px" } }, "Click a row in the table or tree")
+      );
     }
 
-    return () => {
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [isResizing]);
+    var label = getScoreLabel(selectedData.score);
 
-  return (
-    <div
-      style={{
-        display: "flex",
-        height: "100vh",
-        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-        fontSize: "13px",
-        background: "#f9fafb",
-        overflow: "hidden",
-      }}
-    >
-      {/* Main Panel */}
-      <div
-        style={{
-          flex: 1,
-          display: "flex",
-          flexDirection: "column",
-          minWidth: 0,
-        }}
-      >
-        {/* Header */}
-        <div
-          style={{
-            padding: "12px 16px",
-            borderBottom: "1px solid #e5e7eb",
-            background: "white",
-            flexShrink: 0,
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-            }}
-          >
-            <h2 style={{ margin: 0, fontSize: "16px", fontWeight: 600 }}>
-              🔥 Render Tracker Elite
-            </h2>
-            <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-              <div
-                style={{
-                  width: "8px",
-                  height: "8px",
-                  borderRadius: "50%",
-                  background: isConnected ? "#10b981" : "#ef4444",
-                }}
-              />
-              <span style={{ fontSize: "11px", color: "#6b7280" }}>
-                {isConnected ? "Connected" : "Disconnected"}
-              </span>
-              <button
-                onClick={handleReset}
-                style={{
-                  padding: "4px 12px",
-                  background: "#ef4444",
-                  color: "white",
-                  border: "none",
-                  borderRadius: "4px",
-                  fontSize: "12px",
-                  cursor: "pointer",
-                  fontWeight: 500,
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "#dc2626";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "#ef4444";
-                }}
-              >
-                Reset Data
-              </button>
-            </div>
-          </div>
-          <div
-            style={{
-              marginTop: "8px",
-              display: "flex",
-              gap: "12px",
-              alignItems: "center",
-              flexWrap: "wrap",
-            }}
-          >
-            <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-              <span style={{ fontSize: "12px", color: "#6b7280" }}>View:</span>
-              <select
-                value={viewMode}
-                onChange={(e) => setViewMode(e.target.value)}
-                style={{
-                  padding: "4px 8px",
-                  border: "1px solid #d1d5db",
-                  borderRadius: "4px",
-                  fontSize: "12px",
-                  cursor: "pointer",
-                }}
-              >
-                <option value="table">📊 Table</option>
-                <option value="tree">🌲 Component Tree</option>
-                <option value="flamegraph">🔥 Flamegraph</option>
-                <option value="timeline">⏱️ Timeline</option>
-              </select>
-            </div>
+    return React.createElement("div", null,
+      React.createElement("div", { style: s.detailSection },
+        React.createElement("div", { style: s.flexRow },
+          React.createElement("span", { style: { fontWeight: 600, fontFamily: "'JetBrains Mono', monospace", fontSize: "12px", display: "flex", alignItems: "center", gap: "6px" } },
+            React.createElement(label.icon, { size: 13 }),
+            " " + selectedComponent
+          ),
+          React.createElement("button", { onClick: function () { setSelectedComponent(null); }, style: s.btnGhost },
+            React.createElement(X, { size: 14 })
+          )
+        )
+      ),
+      React.createElement("div", { style: s.detailSection },
+        React.createElement("div", { style: s.statGrid },
+          React.createElement("div", { style: s.statCell },
+            React.createElement("div", { style: s.statLabel }, "Renders"),
+            React.createElement("div", { style: s.statValue }, String(selectedData.renders))
+          ),
+          React.createElement("div", { style: s.statCell },
+            React.createElement("div", { style: s.statLabel, title: "Renders unique to this component, excluding children" }, "Exclusive"),
+            React.createElement("div", { style: s.statValue }, String(selectedData.exclusive))
+          ),
+          React.createElement("div", { style: s.statCell },
+            React.createElement("div", { style: s.statLabel }, "Score"),
+            React.createElement("div", { style: { ...s.statValue, color: getTextColor(selectedData.score, 500, colorMode === "dark") } }, String(selectedData.score))
+          ),
+          React.createElement("div", { style: s.statCell },
+            React.createElement("div", { style: s.statLabel }, "Total"),
+            React.createElement("div", { style: s.statValue }, String(selectedData.total))
+          )
+        )
+      ),
+      matchedRules.length > 0
+        ? React.createElement("div", { style: s.detailSection },
+            React.createElement("h4", { style: s.sectionTitle },
+              React.createElement(Lightbulb, { size: 12 }),
+              " Matched Rules (" + matchedRules.length + ")"
+            ),
+            matchedRules.map(function (r, i) {
+              return React.createElement("div", { key: i, style: s.insightCard(r.severity) },
+                React.createElement("div", { style: { fontWeight: 600, fontSize: "11px", marginBottom: "2px", display: "flex", alignItems: "center", gap: "4px", justifyContent: "space-between" } },
+                  React.createElement("span", null, r.name),
+                  React.createElement("span", { style: { fontSize: "9px", color: "var(--text-muted)", fontWeight: 400 } }, r.categoryName)
+                ),
+                React.createElement("div", { style: { fontSize: "11px", marginBottom: "4px" } }, r.message),
+                React.createElement("div", { style: s.insightSuggestion }, r.suggestion),
+                React.createElement("div", { style: { display: "flex", gap: "8px", fontSize: "10px", marginTop: "4px", color: "var(--text-muted)" } },
+                  React.createElement("span", null, "Confidence: " + r.confidence + "%"),
+                  r.impact ? React.createElement("span", null, r.impact) : null
+                )
+              );
+            })
+          )
+        : null,
+      selectedData.causeChain && selectedData.causeChain.length > 0
+        ? React.createElement("div", { style: s.detailSection },
+            React.createElement("h4", { style: s.sectionTitle },
+              React.createElement(GitBranch, { size: 12 }),
+              " Cause Chain (" + selectedData.causeChain.length + ")"
+            ),
+            selectedData.causeChain.map(function (link, i) {
+              var isRoot = link.causeType !== "parent";
+              return React.createElement("div", { key: i, style: s.causeStep(isRoot) },
+                i > 0 ? React.createElement("span", { style: s.causeArrow }, "\u203A") : null,
+                React.createElement("span", { style: { fontWeight: isRoot ? 600 : 400, fontSize: "11px" } }, link.name),
+                React.createElement("span", { style: { marginLeft: "auto", ...s.chip(isRoot ? "high" : "low") } }, link.causeType)
+              );
+            })
+          )
+        : null,
+      selectedData.propDiff && selectedData.propDiff.length > 0
+        ? React.createElement("div", { style: s.detailSection },
+            React.createElement("h4", { style: s.sectionTitle },
+              React.createElement(ArrowLeftRight, { size: 12 }),
+              " Props (" + selectedData.propDiff.length + ")"
+            ),
+            selectedData.propDiff.slice(0, 8).map(function (diff, i) {
+              return React.createElement("div", { key: i, style: s.propDiffItem },
+                React.createElement("div", { style: s.flexRow },
+                  React.createElement("span", { style: s.propKey }, diff.key),
+                  React.createElement("span", { style: s.chip(diff.isFunctionRefChange ? "critical" : "low") },
+                    diff.isFunctionRefChange ? "fn ref" : diff.type
+                  )
+                ),
+                diff.prevValue !== undefined
+                  ? React.createElement("div", { style: { fontSize: "10px", marginTop: "1px" } },
+                      React.createElement("span", { style: { color: "var(--text-muted)" } }, "was "),
+                      React.createElement("span", { style: s.propValue }, String(diff.prevValue).slice(0, 40))
+                    )
+                  : null,
+                diff.nextValue !== undefined
+                  ? React.createElement("div", { style: { fontSize: "10px" } },
+                      React.createElement("span", { style: { color: "var(--text-muted)" } }, "now "),
+                      React.createElement("span", { style: s.propChange }, String(diff.nextValue).slice(0, 40))
+                    )
+                  : null
+              );
+            })
+          )
+        : null,
+      selectedData.history && selectedData.history.length > 0
+        ? React.createElement("div", { style: { ...s.detailSection, borderBottom: "none" } },
+            React.createElement("h4", { style: s.sectionTitle },
+              React.createElement(History, { size: 12 }),
+              " History (" + selectedData.history.length + ")"
+            ),
+            [].concat(selectedData.history).reverse().map(function (h, i) {
+              return React.createElement("div", { key: i, style: s.historyEvent() },
+                React.createElement("div", { style: s.flexRow },
+                  React.createElement("span", { style: { fontWeight: 600, fontSize: "11px" } }, "Ex: " + h.exclusive + "  T: " + h.total),
+                  React.createElement("span", { style: { fontSize: "10px", color: "var(--text-muted)" } }, new Date(h.timestamp).toLocaleTimeString())
+                )
+              );
+            })
+          )
+        : null
+    );
+  }
 
-            {viewMode === "table" && (
-              <div
-                style={{ display: "flex", gap: "8px", alignItems: "center" }}
-              >
-                <span style={{ fontSize: "12px", color: "#6b7280" }}>
-                  Sort:
-                </span>
-                <select
-                  value={sortBy}
-                  onChange={(e) => setSortBy(e.target.value)}
-                  style={{
-                    padding: "4px 8px",
-                    border: "1px solid #d1d5db",
-                    borderRadius: "4px",
-                    fontSize: "12px",
-                    cursor: "pointer",
-                  }}
-                >
-                  <option value="score">🎯 Render Score</option>
-                  <option value="exclusive">Exclusive</option>
-                  <option value="renders">Renders</option>
-                  <option value="total">Total Subtree</option>
-                  <option value="name">Name</option>
-                </select>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Content Area */}
-        <div style={{ flex: 1, overflow: "auto", background: "white" }}>
-          {!isConnected && (
-            <div
-              style={{
-                padding: "40px",
-                textAlign: "center",
-                color: "#9ca3af",
-              }}
-            >
-              <div style={{ fontSize: "48px", marginBottom: "16px" }}>⚠️</div>
-              <p>Waiting for connection...</p>
-              <p style={{ fontSize: "11px", marginTop: "8px" }}>
-                If data doesn't appear, refresh the page with DevTools open
-              </p>
-            </div>
-          )}
-
-          {isConnected && viewMode === "table" && (
-            <>
-              {sortedComponents.length === 0 ? (
-                <div
-                  style={{
-                    padding: "40px",
-                    textAlign: "center",
-                    color: "#9ca3af",
-                  }}
-                >
-                  <div style={{ fontSize: "48px", marginBottom: "16px" }}>
-                    ⏳
-                  </div>
-                  <p>Waiting for render data...</p>
-                  <p style={{ fontSize: "11px", marginTop: "8px" }}>
-                    Interact with your React app
-                  </p>
-                </div>
-              ) : (
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr
-                      style={{
-                        borderBottom: "2px solid #e5e7eb",
-                        background: "#f9fafb",
-                        position: "sticky",
-                        top: 0,
-                        zIndex: 1,
-                      }}
-                    >
-                      <th
-                        style={{
-                          padding: "10px 16px",
-                          textAlign: "left",
-                          fontWeight: 600,
-                          fontSize: "12px",
-                          color: "#374151",
-                        }}
-                      >
-                        Component
-                      </th>
-                      <th
-                        style={{
-                          padding: "10px 16px",
-                          textAlign: "center",
-                          fontWeight: 600,
-                          fontSize: "12px",
-                          color: "#374151",
-                          width: "100px",
-                        }}
-                      >
-                        Score
-                      </th>
-                      <th
-                        style={{
-                          padding: "10px 16px",
-                          textAlign: "right",
-                          fontWeight: 600,
-                          fontSize: "12px",
-                          color: "#374151",
-                          width: "100px",
-                        }}
-                      >
-                        Renders
-                      </th>
-                      <th
-                        style={{
-                          padding: "10px 16px",
-                          textAlign: "right",
-                          fontWeight: 600,
-                          fontSize: "12px",
-                          color: "#374151",
-                          width: "100px",
-                        }}
-                      >
-                        Exclusive
-                      </th>
-                      <th
-                        style={{
-                          padding: "10px 16px",
-                          textAlign: "center",
-                          fontWeight: 600,
-                          fontSize: "12px",
-                          color: "#374151",
-                          width: "80px",
-                        }}
-                      >
-                        Root
-                      </th>
-                      <th
-                        style={{
-                          padding: "10px 16px",
-                          textAlign: "left",
-                          fontWeight: 600,
-                          fontSize: "12px",
-                          color: "#374151",
-                          width: "150px",
-                        }}
-                      >
-                        Patterns
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sortedComponents.map(([name, stats]) => {
-                      const isSelected = selectedComponent === name;
-
-                      return (
-                        <tr
-                          key={name}
-                          onClick={() => setSelectedComponent(name)}
-                          style={{
-                            borderBottom: "1px solid #f3f4f6",
-                            cursor: "pointer",
-                            background: isSelected ? "#eff6ff" : "white",
-                          }}
-                          onMouseEnter={(e) => {
-                            if (!isSelected)
-                              e.currentTarget.style.background = "#f9fafb";
-                          }}
-                          onMouseLeave={(e) => {
-                            if (!isSelected)
-                              e.currentTarget.style.background = "white";
-                          }}
-                        >
-                          <td
-                            style={{
-                              padding: "10px 16px",
-                              fontFamily: "monospace",
-                              fontSize: "13px",
-                              fontWeight: 500,
-                              color: isSelected ? "#1e40af" : "#111827",
-                            }}
-                          >
-                            {name}
-                          </td>
-                          <td
-                            style={{
-                              padding: "10px 16px",
-                              textAlign: "center",
-                              fontSize: "18px",
-                            }}
-                          >
-                            {stats.scoreLabel.emoji}
-                          </td>
-                          <td
-                            style={{
-                              padding: "10px 16px",
-                              textAlign: "right",
-                              background: getHeatmapColor(
-                                stats.renders,
-                                maxRenders,
-                              ),
-                              color: getTextColor(stats.renders, maxRenders),
-                              fontWeight: 500,
-                            }}
-                          >
-                            {stats.renders}
-                          </td>
-                          <td
-                            style={{
-                              padding: "10px 16px",
-                              textAlign: "right",
-                              background: getHeatmapColor(
-                                stats.exclusive,
-                                maxExclusive,
-                              ),
-                              color: getTextColor(
-                                stats.exclusive,
-                                maxExclusive,
-                              ),
-                              fontWeight: 600,
-                            }}
-                          >
-                            {stats.exclusive}
-                          </td>
-                          <td
-                            style={{
-                              padding: "10px 16px",
-                              textAlign: "center",
-                              fontSize: "16px",
-                            }}
-                          >
-                            {stats.rootCause
-                              ? getCauseIcon(stats.rootCause.causeType)
-                              : "—"}
-                          </td>
-                          <td
-                            style={{ padding: "10px 16px", fontSize: "11px" }}
-                          >
-                            {stats.patterns.length > 0 ? (
-                              <div
-                                style={{
-                                  display: "flex",
-                                  gap: "4px",
-                                  flexWrap: "wrap",
-                                }}
-                              >
-                                {stats.patterns.slice(0, 2).map((p, i) => (
-                                  <span
-                                    key={i}
-                                    style={{
-                                      padding: "2px 6px",
-                                      background:
-                                        p.severity === "critical"
-                                          ? "#fee2e2"
-                                          : p.severity === "high"
-                                            ? "#fed7aa"
-                                            : "#fef3c7",
-                                      borderRadius: "3px",
-                                      fontSize: "10px",
-                                    }}
-                                  >
-                                    {p.type}
-                                  </span>
-                                ))}
-                              </div>
-                            ) : (
-                              <span style={{ color: "#9ca3af" }}>—</span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              )}
-            </>
-          )}
-
-          {viewMode === "tree" && (
-            <div style={{ padding: "16px" }}>
-              {componentTree ? (
-                <>
-                  <h3
-                    style={{
-                      margin: "0 0 16px 0",
-                      fontSize: "14px",
-                      fontWeight: 600,
-                    }}
-                  >
-                    🌲 Component Tree
-                  </h3>
-                  {renderComponentTree(componentTree)}
-                </>
-              ) : (
-                <div
-                  style={{
-                    padding: "40px",
-                    textAlign: "center",
-                    color: "#9ca3af",
-                  }}
-                >
-                  <div style={{ fontSize: "48px", marginBottom: "16px" }}>
-                    🌲
-                  </div>
-                  <p>No component tree data yet</p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {viewMode === "flamegraph" && (
-            <div style={{ padding: "16px" }}>
-              <h3
-                style={{
-                  margin: "0 0 16px 0",
-                  fontSize: "14px",
-                  fontWeight: 600,
-                }}
-              >
-                🔥 Flamegraph (by Render Score)
-              </h3>
-              {sortedComponents.length > 0 ? (
-                <canvas
-                  ref={canvasRef}
-                  width={900}
-                  height={Math.max(400, sortedComponents.length * 30)}
-                  style={{
-                    border: "1px solid #e5e7eb",
-                    borderRadius: "6px",
-                    maxWidth: "100%",
-                  }}
-                />
-              ) : (
-                <div
-                  style={{
-                    padding: "40px",
-                    textAlign: "center",
-                    color: "#9ca3af",
-                  }}
-                >
-                  <p>No data to visualize</p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {viewMode === "timeline" && renderTimeline()}
-        </div>
-      </div>
-
-      {/* Resize Handle */}
-      <div
-        onMouseDown={handleMouseDown}
-        style={{
-          width: "4px",
-          cursor: "col-resize",
-          background: isResizing ? "#3b82f6" : "#e5e7eb",
-          transition: "background 0.15s",
-          flexShrink: 0,
-        }}
-        onMouseEnter={(e) => {
-          if (!isResizing) e.currentTarget.style.background = "#d1d5db";
-        }}
-        onMouseLeave={(e) => {
-          if (!isResizing) e.currentTarget.style.background = "#e5e7eb";
-        }}
-      />
-
-      {/* Right Sidebar */}
-      <div
-        style={{
-          width: `${sidebarWidth}px`,
-          borderLeft: "1px solid #e5e7eb",
-          display: "flex",
-          flexDirection: "column",
-          background: "white",
-          flexShrink: 0,
-          overflow: "hidden",
-        }}
-      >
-        {/* Auto Insights */}
-        <div
-          style={{
-            maxHeight: "250px",
-            minHeight: "120px",
-            overflow: "auto",
-            borderBottom: "1px solid #e5e7eb",
-            background: "#fffbeb",
-            flexShrink: 0,
-          }}
-        >
-          <div
-            style={{
-              padding: "12px 16px",
-              borderBottom: "1px solid #fde68a",
-              background: "#fef3c7",
-              position: "sticky",
-              top: 0,
-              zIndex: 1,
-            }}
-          >
-            <h4 style={{ margin: 0, fontSize: "12px", fontWeight: 600 }}>
-              💡 Auto Insights
-            </h4>
-          </div>
-          <div style={{ padding: "12px" }}>
-            {autoInsights.length === 0 ? (
-              <p style={{ fontSize: "11px", color: "#92400e", margin: 0 }}>
-                No performance issues detected
-              </p>
-            ) : (
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "8px",
-                }}
-              >
-                {autoInsights.map((insight, idx) => (
-                  <div
-                    key={idx}
-                    style={{
-                      padding: "10px",
-                      background:
-                        insight.severity === "critical" ? "#fee2e2" : "#fed7aa",
-                      borderLeft: `3px solid ${
-                        insight.severity === "critical" ? "#dc2626" : "#f59e0b"
-                      }`,
-                      borderRadius: "4px",
-                      fontSize: "11px",
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontWeight: 600,
-                        marginBottom: "4px",
-                        fontFamily: "monospace",
-                      }}
-                    >
-                      {insight.component}
-                    </div>
-                    <div style={{ marginBottom: "6px" }}>{insight.message}</div>
-                    {insight.confidence && (
-                      <div
-                        style={{
-                          fontSize: "10px",
-                          color: "#374151",
-                          marginBottom: "6px",
-                        }}
-                      >
-                        Confidence: {insight.confidence}%
-                      </div>
-                    )}
-                    <div
-                      style={{
-                        fontSize: "11px",
-                        color: "#065f46",
-                        background: "#d1fae5",
-                        padding: "4px 8px",
-                        borderRadius: "3px",
-                      }}
-                    >
-                      💡 {insight.suggestion}
-                    </div>
-                    {insight.impact && (
-                      <div
-                        style={{
-                          fontSize: "10px",
-                          color: "#6b7280",
-                          marginTop: "4px",
-                        }}
-                      >
-                        Impact: {insight.impact}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Component Details */}
-        <div
-          style={{
-            flex: 1,
-            borderBottom: "1px solid #e5e7eb",
-            overflow: "auto",
-          }}
-        >
-          {selectedComponent && components[selectedComponent] ? (
-            <div style={{ padding: "16px" }}>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  marginBottom: "16px",
-                }}
-              >
-                <h3
-                  style={{
-                    margin: 0,
-                    fontSize: "14px",
-                    fontWeight: 600,
-                    fontFamily: "monospace",
-                  }}
-                >
-                  {selectedComponent}
-                </h3>
-                <button
-                  onClick={() => setSelectedComponent(null)}
-                  style={{
-                    background: "none",
-                    border: "none",
-                    cursor: "pointer",
-                    fontSize: "18px",
-                    color: "#9ca3af",
-                  }}
-                >
-                  ✕
-                </button>
-              </div>
-
-              {/* Render Score */}
-              <div
-                style={{
-                  background: "#f9fafb",
-                  padding: "12px",
-                  borderRadius: "6px",
-                  marginBottom: "16px",
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: "11px",
-                    color: "#6b7280",
-                    marginBottom: "4px",
-                  }}
-                >
-                  Render Score
-                </div>
-                <div
-                  style={{
-                    fontSize: "28px",
-                    fontWeight: 700,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "12px",
-                  }}
-                >
-                  {components[selectedComponent].scoreLabel.emoji}
-                  <span>{components[selectedComponent].score}</span>
-                  <span style={{ fontSize: "13px", color: "#6b7280" }}>
-                    ({components[selectedComponent].scoreLabel.label})
-                  </span>
-                </div>
-              </div>
-
-              {/* TRUE CAUSAL CHAIN (ELITE) */}
-              {components[selectedComponent].causeChain &&
-                components[selectedComponent].causeChain.length > 0 && (
-                  <div style={{ marginBottom: "20px" }}>
-                    <h4
-                      style={{
-                        margin: "0 0 8px 0",
-                        fontSize: "12px",
-                        fontWeight: 600,
-                        color: "#374151",
-                      }}
-                    >
-                      🔥 True Root Cause Chain
-                    </h4>
-                    <div
-                      style={{
-                        padding: "12px",
-                        background: "#eff6ff",
-                        borderLeft: "3px solid #3b82f6",
-                        borderRadius: "4px",
-                        fontSize: "12px",
-                        fontFamily: "monospace",
-                      }}
-                    >
-                      {components[selectedComponent].causeChain.map(
-                        (chain, idx) => {
-                          const isRoot =
-                            idx === components[selectedComponent].rootIndex;
-                          return (
-                            <div
-                              key={idx}
-                              style={{
-                                marginBottom:
-                                  idx <
-                                  components[selectedComponent].causeChain
-                                    .length -
-                                    1
-                                    ? "8px"
-                                    : "0",
-                                background: isRoot ? "#dbeafe" : "transparent",
-                                padding: isRoot ? "6px" : "0",
-                                borderRadius: isRoot ? "4px" : "0",
-                              }}
-                            >
-                              <div
-                                style={{
-                                  fontWeight: 600,
-                                  display: "flex",
-                                  alignItems: "center",
-                                  gap: "8px",
-                                }}
-                              >
-                                {isRoot && (
-                                  <span
-                                    style={{
-                                      fontSize: "10px",
-                                      background: "#ef4444",
-                                      color: "white",
-                                      padding: "2px 6px",
-                                      borderRadius: "3px",
-                                    }}
-                                  >
-                                    ROOT
-                                  </span>
-                                )}
-                                {getCauseIcon(chain.causeType)} {chain.name}
-                              </div>
-                              {idx <
-                                components[selectedComponent].causeChain
-                                  .length -
-                                  1 && (
-                                <div
-                                  style={{
-                                    color: "#6b7280",
-                                    marginLeft: "8px",
-                                    fontSize: "11px",
-                                    marginTop: "2px",
-                                  }}
-                                >
-                                  ↑ propagates via {chain.causeType}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        },
-                      )}
-                    </div>
-                  </div>
-                )}
-
-              {/* PREDICTIVE OPTIMIZATION (BREAKTHROUGH) */}
-              {components[selectedComponent].predictions &&
-                components[selectedComponent].predictions.length > 0 && (
-                  <div style={{ marginBottom: "20px" }}>
-                    <h4
-                      style={{
-                        margin: "0 0 8px 0",
-                        fontSize: "12px",
-                        fontWeight: 600,
-                        color: "#374151",
-                      }}
-                    >
-                      🔮 Predictive Optimization
-                    </h4>
-                    <div
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: "8px",
-                      }}
-                    >
-                      {components[selectedComponent].predictions.map(
-                        (pred, i) => (
-                          <div
-                            key={i}
-                            style={{
-                              padding: "10px",
-                              background: "#f0fdf4",
-                              border: "1px solid #10b981",
-                              borderRadius: "4px",
-                              fontSize: "11px",
-                            }}
-                          >
-                            <div
-                              style={{
-                                fontWeight: 600,
-                                marginBottom: "4px",
-                                color: "#065f46",
-                              }}
-                            >
-                              {pred.optimization}
-                            </div>
-                            <div
-                              style={{
-                                fontSize: "18px",
-                                fontWeight: 700,
-                                color: "#10b981",
-                                marginBottom: "4px",
-                              }}
-                            >
-                              ~{pred.expectedReduction}% reduction
-                            </div>
-                            <div
-                              style={{
-                                fontSize: "10px",
-                                color: "#4b5563",
-                                marginBottom: "4px",
-                              }}
-                            >
-                              Confidence: {pred.confidence}%
-                            </div>
-                            <div style={{ fontSize: "10px", color: "#6b7280" }}>
-                              {pred.reasoning}
-                            </div>
-                          </div>
-                        ),
-                      )}
-                    </div>
-                  </div>
-                )}
-
-              {/* Prop Diff */}
-              {components[selectedComponent].propDiff.length > 0 && (
-                <div style={{ marginBottom: "20px" }}>
-                  <h4
-                    style={{
-                      margin: "0 0 8px 0",
-                      fontSize: "12px",
-                      fontWeight: 600,
-                      color: "#374151",
-                    }}
-                  >
-                    🧬 Prop Diff Viewer
-                  </h4>
-                  <div
-                    style={{
-                      background: "#f9fafb",
-                      padding: "10px",
-                      borderRadius: "4px",
-                      fontSize: "11px",
-                      fontFamily: "monospace",
-                      maxHeight: "200px",
-                      overflow: "auto",
-                    }}
-                  >
-                    {components[selectedComponent].propDiff.map((diff, i) => (
-                      <div
-                        key={i}
-                        style={{
-                          marginBottom: "6px",
-                          paddingBottom: "6px",
-                          borderBottom:
-                            i <
-                            components[selectedComponent].propDiff.length - 1
-                              ? "1px solid #e5e7eb"
-                              : "none",
-                        }}
-                      >
-                        <div style={{ fontWeight: 600, marginBottom: "2px" }}>
-                          {diff.key}:
-                        </div>
-                        <div style={{ color: "#dc2626" }}>
-                          - {diff.prevValue}
-                        </div>
-                        <div style={{ color: "#059669" }}>
-                          + {diff.nextValue}
-                        </div>
-                        {diff.isFunctionRefChange && (
-                          <div
-                            style={{
-                              marginTop: "4px",
-                              padding: "4px 6px",
-                              background: "#fef3c7",
-                              borderRadius: "3px",
-                              fontSize: "10px",
-                            }}
-                          >
-                            ⚠️ Function reference changed
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Render History */}
-              <div>
-                <h4
-                  style={{
-                    margin: "0 0 8px 0",
-                    fontSize: "12px",
-                    fontWeight: 600,
-                    color: "#374151",
-                  }}
-                >
-                  📊 Render History
-                </h4>
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "6px",
-                    maxHeight: "300px",
-                    overflow: "auto",
-                  }}
-                >
-                  {components[selectedComponent].history
-                    ?.slice()
-                    .reverse()
-                    .map((event, idx) => {
-                      const intensity =
-                        event.exclusive /
-                        Math.max(components[selectedComponent].maxExclusive, 1);
-                      const bgColor =
-                        intensity > 0.7
-                          ? "#fee2e2"
-                          : intensity > 0.4
-                            ? "#fed7aa"
-                            : "#dbeafe";
-
-                      return (
-                        <div
-                          key={idx}
-                          style={{
-                            padding: "8px",
-                            background: bgColor,
-                            borderRadius: "4px",
-                            fontSize: "11px",
-                          }}
-                        >
-                          <div
-                            style={{
-                              display: "flex",
-                              justifyContent: "space-between",
-                              marginBottom: "4px",
-                            }}
-                          >
-                            <span style={{ fontWeight: 600 }}>
-                              Exclusive: {event.exclusive}
-                            </span>
-                            <span style={{ color: "#6b7280" }}>
-                              {new Date(event.timestamp).toLocaleTimeString()}
-                            </span>
-                          </div>
-                          <div style={{ color: "#4b5563" }}>
-                            {formatRenderCauses(event.changes)}
-                          </div>
-                        </div>
-                      );
-                    })}
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div
-              style={{
-                padding: "40px 20px",
-                textAlign: "center",
-                color: "#9ca3af",
-              }}
-            >
-              <div style={{ fontSize: "40px", marginBottom: "12px" }}>👆</div>
-              <p>Select a component to see details</p>
-            </div>
-          )}
-        </div>
-
-        {/* Live Updates Feed */}
-        <div
-          style={{
-            height: "200px",
-            borderTop: "1px solid #e5e7eb",
-            flexShrink: 0,
-          }}
-        >
-          <div
-            style={{
-              padding: "12px 16px",
-              borderBottom: "1px solid #e5e7eb",
-              background: "#f9fafb",
-            }}
-          >
-            <h4 style={{ margin: 0, fontSize: "12px", fontWeight: 600 }}>
-              ⚡ Live Updates
-            </h4>
-          </div>
-          <div style={{ height: "calc(100% - 45px)", overflow: "auto" }}>
-            {recentUpdates.length === 0 ? (
-              <div
-                style={{
-                  padding: "20px",
-                  textAlign: "center",
-                  color: "#9ca3af",
-                  fontSize: "11px",
-                }}
-              >
-                No recent activity
-              </div>
-            ) : (
-              <div style={{ padding: "8px" }}>
-                {recentUpdates.map((update) => (
-                  <div
-                    key={update.id}
-                    onClick={() => setSelectedComponent(update.name)}
-                    style={{
-                      padding: "8px",
-                      marginBottom: "6px",
-                      background: "#f9fafb",
-                      borderRadius: "4px",
-                      fontSize: "11px",
-                      borderLeft: `3px solid ${
-                        update.exclusive > 10
-                          ? "#ef4444"
-                          : update.exclusive > 5
-                            ? "#f59e0b"
-                            : "#10b981"
-                      }`,
-                      cursor: "pointer",
-                      transition: "background 0.15s",
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = "#f3f4f6";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = "#f9fafb";
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        marginBottom: "4px",
-                      }}
-                    >
-                      <span
-                        style={{
-                          fontWeight: 600,
-                          fontFamily: "monospace",
-                          fontSize: "12px",
-                        }}
-                      >
-                        {update.scoreLabel?.emoji} {update.name}
-                      </span>
-                      <span style={{ color: "#6b7280", fontSize: "10px" }}>
-                        {new Date(update.timestamp).toLocaleTimeString()}
-                      </span>
-                    </div>
-                    <div
-                      style={{ display: "flex", gap: "12px", color: "#6b7280" }}
-                    >
-                      <span>Score: {update.score}</span>
-                      <span>Exclusive: {update.exclusive}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
+  return React.createElement("div", { style: s.app },
+    React.createElement("div", { style: s.topBar },
+      React.createElement("div", { style: s.topBarLeft },
+        React.createElement(Flame, { size: 14 }),
+        React.createElement("span", { style: s.topBarTitle }, "Render Tracker"),
+        React.createElement("span", { style: { width: "6px", height: "6px", borderRadius: "50%", background: isConnected ? "#4ade80" : "#f87171", flexShrink: 0 } })
+      ),
+      React.createElement("div", { style: s.topBarCenter },
+        [
+          { id: "table", icon: Table2, label: "Table" },
+          { id: "tree", icon: GitBranch, label: "Tree" },
+          { id: "flamegraph", icon: BarChart3, label: "Flame" },
+          { id: "timeline", icon: Clock, label: "Timeline" },
+        ].map(function (v) {
+          var Icon = v.icon;
+          return React.createElement("button", {
+            key: v.id,
+            style: s.tabBtn(viewMode === v.id),
+            onClick: function () { setViewMode(v.id); },
+            title: v.label,
+          },
+            React.createElement(Icon, { size: 12 }),
+            " " + v.label
+          );
+        })
+      ),
+      React.createElement("div", { style: s.topBarRight },
+        React.createElement("div", { style: s.flexCenter },
+          React.createElement(Search, { size: 12, style: { color: "var(--text-muted)" } }),
+          React.createElement("input", {
+            ref: searchRef,
+            placeholder: "Search...",
+            value: searchQuery,
+            onChange: function (e) { setSearchQuery(e.target.value); },
+            style: s.searchInput,
+          })
+        ),
+        viewMode === "table" ? React.createElement("select", {
+          value: patternFilter,
+          onChange: function (e) { setPatternFilter(e.target.value); },
+          style: s.select,
+        },
+          allPatternTypes.map(function (type) {
+            return React.createElement("option", { key: type, value: type },
+              type === "all" ? "All" : type
+            );
+          })
+        ) : null,
+        React.createElement("button", { onClick: handleExport, style: s.btnGhost, title: "Export" },
+          React.createElement(Download, { size: 13 })
+        ),
+        React.createElement("div", { style: { position: "relative" } },
+          React.createElement("button", {
+            onClick: function () { setShowResetMenu(!showResetMenu); },
+            style: s.btnDanger,
+          },
+            React.createElement(Trash2, { size: 12 })
+          ),
+          showResetMenu ? React.createElement("div", { style: s.dropdownMenu },
+            React.createElement("button", { style: s.dropdownItem(true), onClick: function () { handleResetPartial("all"); } },
+              React.createElement(Trash2, { size: 12 }),
+              " Clear all"
+            ),
+            React.createElement("button", { style: s.dropdownItem(false), onClick: function () { handleResetPartial("timeline"); } },
+              React.createElement(Clock, { size: 12 }),
+              " Clear timeline"
+            ),
+            React.createElement("button", { style: s.dropdownItem(false), onClick: function () { handleResetPartial("insights"); } },
+              React.createElement(Lightbulb, { size: 12 }),
+              " Clear insights"
+            )
+          ) : null
+        )
+      )
+    ),
+    React.createElement("div", { style: s.mainArea },
+      React.createElement("div", { style: s.contentArea },
+        !isConnected
+          ? renderEmptyState(
+              React.createElement(WifiOff, { size: 36 }),
+              "Waiting for connection...",
+              "Open DevTools on any React app (F12). If no data appears, refresh the page with DevTools open."
+            )
+          : viewMode === "table" ? renderTableView()
+          : viewMode === "tree" ? renderTreeView()
+          : viewMode === "flamegraph" ? renderFlamegraphView()
+          : viewMode === "timeline" ? renderTimelineView()
+          : null
+      ),
+      React.createElement("div", {
+        style: s.resizeHandle,
+        onMouseDown: handleMouseDown,
+      }),
+      React.createElement("div", { style: s.sidebarOuter(sidebarWidth) },
+        React.createElement("div", { style: s.sidebarMain }, renderDetailPanel()),
+        React.createElement("div", { style: s.liveFeedOuter },
+          React.createElement("div", {
+            style: s.liveFeedHeader,
+            onClick: function () { setLiveFeedExpanded(!liveFeedExpanded); },
+          },
+            React.createElement(Activity, { size: 12 }),
+            " Live Updates",
+            recentUpdates.length > 0 ? React.createElement("span", { style: { fontSize: "10px", color: "var(--text-muted)", marginLeft: "4px" } }, "(" + recentUpdates.length + ")") : null,
+            React.createElement("span", { style: { marginLeft: "auto", fontSize: "10px" } }, liveFeedExpanded ? "\u25BC" : "\u25B6")
+          ),
+          liveFeedExpanded ? React.createElement("div", { style: s.liveFeedContent },
+            recentUpdates.length === 0
+              ? React.createElement("div", { style: { padding: "12px", textAlign: "center", fontSize: "11px", color: "var(--text-muted)" } }, "No recent activity")
+              : React.createElement("div", { style: { padding: "4px" } },
+                  recentUpdates.map(function (update) {
+                    var rules = evaluateRules(update, null);
+                    var topRule = rules.length > 0 ? rules[0] : null;
+                    return React.createElement("div", {
+                      key: update.id,
+                      onClick: function () { setSelectedComponent(update.name); },
+                      style: s.liveFeedItem(update.exclusive),
+                    },
+                      React.createElement("div", { style: s.flexRow },
+                        React.createElement("span", { style: { fontWeight: 600, fontSize: "11px", fontFamily: "'JetBrains Mono', monospace" } }, update.name),
+                        React.createElement("span", { style: { fontSize: "10px", color: "var(--text-muted)" } }, new Date(update.timestamp).toLocaleTimeString())
+                      ),
+                      React.createElement("div", { style: { display: "flex", gap: "8px", fontSize: "10px", marginTop: "2px" } },
+                        React.createElement("span", null, "Score: " + update.score),
+                        React.createElement("span", null, "Ex: " + update.exclusive)
+                      ),
+                      topRule ? React.createElement("div", { style: { fontSize: "9px", color: "var(--text-muted)", marginTop: "2px" } },
+                        React.createElement("span", { style: s.chip(topRule.severity) }, topRule.id)
+                      ) : null
+                    );
+                  })
+                )
+          ) : null
+        )
+      )
+    )
   );
-};
-
-export default App;
+}
