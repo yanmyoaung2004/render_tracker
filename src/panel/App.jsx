@@ -206,6 +206,9 @@ export default function App() {
   var _useState18 = useState(null);
   var expandedRule = _useState18[0];
   var setExpandedRule = _useState18[1];
+  var _useState19 = useState(0);
+  var renderCount = _useState19[0];
+  var setRenderCount = _useState19[1];
 
   var _useReducer = useReducer(componentsReducer, {});
   var components = _useReducer[0];
@@ -281,6 +284,7 @@ export default function App() {
               var stats = payload.globalStats || [];
 
               dispatch({ type: "UPDATE", updates: updates });
+              setRenderCount(function (c) { return c + 1; });
 
               updatesRef.current = updates;
 
