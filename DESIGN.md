@@ -2,34 +2,34 @@
 name: React Render Tracker
 description: Chrome DevTools panel that explains why React components re-render
 colors:
-  accent: "#818cf8"
-  accent-light: "#6366f1"
-  ink: "#e8e8f0"
-  ink-light: "#1a1a2e"
-  body: "#9494ad"
-  body-light: "#52526b"
-  muted: "#6b6b7d"
-  muted-light: "#6b6b80"
-  canvas: "#0d0d12"
-  canvas-light: "#f0f0f7"
-  surface: "#16161e"
+  accent: "#d4a542"
+  accent-light: "#b8860b"
+  ink: "#e8e8e8"
+  ink-light: "#1a1a14"
+  body: "#999999"
+  body-light: "#666660"
+  muted: "#666666"
+  muted-light: "#999990"
+  canvas: "#121212"
+  canvas-light: "#f5f4f0"
+  surface: "#1c1c1c"
   surface-light: "#ffffff"
-  border: "#282833"
-  border-light: "#d8d8e6"
-  hover: "#1e1e28"
-  hover-light: "#eaeaef"
-  selected: "#1e1e3a"
-  selected-light: "#eef2ff"
-  danger: "#fb7185"
-  danger-light: "#e11d48"
-  warning: "#f59e0b"
-  warning-light: "#d97706"
-  success: "#14b8a6"
-  success-light: "#0d9488"
-  success-bg-dark: "#134e4a"
-  success-bg-light: "#ccfbf1"
-  insight-bg: "#1e1e28"
-  insight-critical-bg: "#2d0a18"
+  border: "#2e2e2e"
+  border-light: "#e4e2dc"
+  hover: "#262626"
+  hover-light: "#ecebe6"
+  selected: "#2a2a1a"
+  selected-light: "#f0eddd"
+  danger: "#e5484d"
+  danger-light: "#c4383c"
+  warning: "#d4a542"
+  warning-light: "#b8860b"
+  success: "#30a46c"
+  success-light: "#2b8259"
+  success-bg-dark: "#1a3a2a"
+  success-bg-light: "#d8f0e0"
+  insight-bg: "#242424"
+  insight-critical-bg: "#2a0f0f"
 typography:
   body:
     fontFamily: "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
@@ -131,30 +131,32 @@ What this system explicitly rejects: gradient text, glassmorphism, decorative st
 
 ## 2. Colors
 
-The palette is a restrained, premium developer-tool palette: deep charcoal/cool neutrals anchored by an indigo accent. Light mode inverts to cool off-white neutrals with a deeper indigo accent.
+The palette is a warm, restrained developer-tool palette: rich charcoal neutrals anchored by a warm gold accent. Light mode inverts to warm off-white neutrals with a deeper gold accent. Warmth makes this panel stand out from every other cool-toned DevTools panel.
 
 ### Primary (Dark / Light)
-- **Indigo Accent** (#818cf8 / #6366f1): The single accent color. Used sparingly for active tab indicators, selected component names, and focus rings. Its rarity is the point.
+- **Gold Accent** (#d4a542 / #b8860b): The single accent color. Warm, premium — inspired by Linear's design system. Used sparingly for active tab indicators, selected component names, and focus rings. Its rarity is the point. The warmth is deliberate: against a cool environment (Chrome DevTools), gold signals that this panel is different.
 
 ### Neutral
-- **Canvas** (#0d0d12 / #f0f0f7): The app background. Dark mode is a deep charcoal; light mode is a cool off-white. This is the base layer.
-- **Surface** (#16161e / #ffffff): The primary surface for cards, the sidebar, and dropdowns. Sits one step above canvas.
-- **Border** (#282833 / #d8d8e6): All structural dividers — table rows, sidebar edges, header bottom. Thin (1px), never colored.
-- **Hover** (#1e1e28 / #eaeaef): A subtle hover tint on clickable rows.
+- **Canvas** (#121212 / #f5f4f0): The app background. Dark mode is a rich warm charcoal; light mode is a warm off-white. This is the base layer.
+- **Surface** (#1c1c1c / #ffffff): The primary surface for cards, the sidebar, and dropdowns. Sits one step above canvas.
+- **Border** (#2e2e2e / #e4e2dc): All structural dividers — table rows, sidebar edges, header bottom. Thin (1px), never colored.
+- **Hover** (#262626 / #ecebe6): A subtle hover tint on clickable rows.
 
 ### Text
-- **Ink** (#e8e8f0 / #1a1a2e): Primary body text. A soft off-white with a cool tint that reads comfortably on dark charcoal.
-- **Body** (#9494ad / #52526b): Secondary text for labels, timestamps, and muted information. Full 4.5:1 contrast against surface.
-- **Muted** (#6b6b7d / #6b6b80): Tertiary text for placeholders and non-essential metadata. Also meets 4.5:1.
+- **Ink** (#e8e8e8 / #1a1a14): Primary body text. A warm off-white that reads comfortably on rich charcoal.
+- **Body** (#999999 / #666660): Secondary text for labels, timestamps, and muted information. Full 4.5:1 contrast against surface.
+- **Muted** (#666666 / #999990): Tertiary text for placeholders and non-essential metadata. Also meets 4.5:1.
 
 ### Semantic
-- **Danger** (#fb7185 / #e11d48): A restrained rose-crimson. Reset/destructive actions, error states, high render scores (>500). Stays within the cool palette family — not a warning red, but a deliberate danger signal.
-- **Warning** (#f59e0b / #d97706): A warm amber — the one intentional warm hue in the palette. Used for medium-to-high scores (200–500) and pattern severity indicators. The warmth creates purposeful contrast against the cool charcoal-indigo backdrop.
-- **Success** (#14b8a6 / #0d9488): A cool teal that bridges indigo to green naturally. Connection status, low render scores (<50). Teal feels premium and avoids the "traffic light" green problem.
+- **Danger** (#e5484d / #c4383c): A desaturated crimson that signals urgency without screaming. Reset/destructive actions, error states, high render scores (>500). Intentionally less saturated than a typical red — it communicates "problem" without the alarm of a traffic-light red.
+- **Warning** (#d4a542 / #b8860b): The accent color doubled as warning. Warm gold communicates "pay attention" naturally because it's the same hue the user already associates with highlights and selections.
+- **Success** (#30a46c / #2b8259): A deep, desaturated green. Connection status, low render scores (<50). Avoids the bright "go" green of traffic lights in favor of a calmer, more premium shade.
 
 ### Named Rules
 
-**The One Accent Rule.** The indigo accent is used on ≤5% of any given screen. It appears on the active tab, the selected component name, and the resize handle on hover. If the accent appears more than three places at once, it's too much.
+**The One Accent Rule.** The gold accent is used on ≤5% of any given screen. It appears on the active tab, the selected component name, and the resize handle on hover. If the accent appears more than three places at once, it's too much.
+
+**The Warmth Rule.** The palette is deliberately warm — dark charcoals, gold accents, amber warnings. This creates a distinctive identity against Chrome DevTools' cool-native interface. The warmth is the point. Do not introduce cool blues or grays that break the temperature consistency.
 
 **The Tonal Depth Rule.** Depth is conveyed by stepping up one surface level, not by adding shadows. Canvas → Surface → Hover → Selected is the full depth scale. No `box-shadow` on any surface.
 
@@ -245,7 +247,7 @@ Dropdowns escape the stacking context via `position: absolute` with no shadow. T
 ## 6. Do's and Don'ts
 
 ### Do:
-- **Do** use the accent color (`#818cf8` / `#6366f1`) on exactly one element per view — the active tab.
+- **Do** use the accent color (`#d4a542` / `#b8860b`) on exactly one element per view — the active tab.
 - **Do** use JetBrains Mono for all component names, render counts, scores, and prop values.
 - **Do** keep table rows at 5px vertical padding — anything more wastes vertical space in a DevTools panel.
 - **Do** make every row clickable. Clicking a component in any view selects it and shows details in the sidebar.
