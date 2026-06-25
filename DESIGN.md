@@ -20,16 +20,16 @@ colors:
   hover-light: "#eaeaef"
   selected: "#1e1e3a"
   selected-light: "#eef2ff"
-  danger: "#f87171"
-  danger-light: "#dc2626"
-  warning: "#fbbf24"
+  danger: "#fb7185"
+  danger-light: "#e11d48"
+  warning: "#f59e0b"
   warning-light: "#d97706"
-  success: "#4ade80"
-  success-light: "#16a34a"
-  success-bg-dark: "#0d1117"
-  success-bg-light: "#eef2ff"
+  success: "#14b8a6"
+  success-light: "#0d9488"
+  success-bg-dark: "#134e4a"
+  success-bg-light: "#ccfbf1"
   insight-bg: "#1e1e28"
-  insight-critical-bg: "#2d0a0a"
+  insight-critical-bg: "#2d0a18"
 typography:
   body:
     fontFamily: "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
@@ -148,9 +148,9 @@ The palette is a restrained, premium developer-tool palette: deep charcoal/cool 
 - **Muted** (#6b6b7d / #6b6b80): Tertiary text for placeholders and non-essential metadata. Also meets 4.5:1.
 
 ### Semantic
-- **Danger** (#f87171 / #ef4444): Reset/destructive actions, error states, high render scores (>500).
-- **Warning** (#fbbf24 / #f59e0b): Medium-to-high scores (200–500), pattern severity indicators.
-- **Success** (#4ade80 / #22c55e): Connection status, low render scores (<50).
+- **Danger** (#fb7185 / #e11d48): A restrained rose-crimson. Reset/destructive actions, error states, high render scores (>500). Stays within the cool palette family — not a warning red, but a deliberate danger signal.
+- **Warning** (#f59e0b / #d97706): A warm amber — the one intentional warm hue in the palette. Used for medium-to-high scores (200–500) and pattern severity indicators. The warmth creates purposeful contrast against the cool charcoal-indigo backdrop.
+- **Success** (#14b8a6 / #0d9488): A cool teal that bridges indigo to green naturally. Connection status, low render scores (<50). Teal feels premium and avoids the "traffic light" green problem.
 
 ### Named Rules
 

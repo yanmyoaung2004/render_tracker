@@ -67,7 +67,7 @@ function getHeatmapColor(value, max, heatmap) {
 function getTextColor(value, max, isDark) {
   if (isDark) return "#f1f5f9";
   var intensity = Math.min(value / Math.max(max, 1), 1);
-  if (intensity < 0.6) return "#065f46";
+  if (intensity < 0.6) return "#0f766e";
   if (intensity < 0.8) return "#92400e";
   return "#991b1b";
 }
