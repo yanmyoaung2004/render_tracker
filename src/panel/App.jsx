@@ -11,6 +11,7 @@ import { createStyles } from "./styles";
 import { themes as themeMap, typography } from "./theme";
 import { componentsReducer } from "./componentData";
 import { evaluateRules, evaluateAllComponents, CATEGORIES } from "./rulesEngine";
+import { generateExplanation, getQuickTip } from "./nlgEngine";
 
 var ICON_SIZE = 16;
 var sidebarDefault = 450;
@@ -209,6 +210,12 @@ export default function App() {
   var _useState19 = useState(0);
   var renderCount = _useState19[0];
   var setRenderCount = _useState19[1];
+  var _useState20 = useState(null);
+  var copiedRule = _useState20[0];
+  var setCopiedRule = _useState20[1];
+  var _useState21 = useState(null);
+  var reactVersion = _useState21[0];
+  var setReactVersion = _useState21[1];
 
   var _useReducer = useReducer(componentsReducer, {});
   var components = _useReducer[0];
@@ -218,6 +225,14 @@ export default function App() {
   var updatesRef = useRef([]);
   var searchRef = useRef(null);
   var themeStyleRef = useRef(null);
+  var portRef = useRef(null);
+
+  useEffect(function () {
+    if (!selectedComponent || !portRef.current) return;
+    try {
+      portRef.current.postMessage({ type: "HIGHLIGHT", componentName: selectedComponent, severity: "high" });
+    } catch (e) {}
+  }, [selectedComponent]);
 
   var s = useMemo(function () {
     return createStyles(colorMode);
@@ -269,6 +284,7 @@ export default function App() {
       if (window.portPromise) {
         window.portPromise.then(function (p) {
           port = p;
+          portRef.current = p;
           setIsConnected(true);
 
           port.onMessage.addListener(function (message) {
@@ -305,6 +321,7 @@ export default function App() {
                 setTimelineIndex(timelineData.length - 1);
               }
               if (stats.length > 0) setGlobalStats(stats);
+              if (payload.reactVersion && !reactVersion) setReactVersion(payload.reactVersion);
 
               if (insightsTimerRef.current) clearTimeout(insightsTimerRef.current);
               insightsTimerRef.current = setTimeout(function () {
@@ -858,32 +875,44 @@ export default function App() {
                   React.createElement("span", { style: { fontSize: "9px", color: "var(--text-muted)", fontWeight: 400 } }, r.categoryName)
                 ),
                 React.createElement("div", { style: { fontSize: "11px", marginBottom: "4px" } }, r.message),
-                React.createElement("div", { style: s.insightSuggestion }, r.suggestion),
-                React.createElement("div", { style: { display: "flex", gap: "8px", fontSize: "10px", marginTop: "4px", color: "var(--text-muted)", alignItems: "center" } },
+                React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "4px", marginBottom: "4px" } },
+                  React.createElement("div", { style: { flex: 1, ...s.insightSuggestion } }, r.suggestion),
+                  React.createElement("button", {
+                    onClick: function (e) { e.stopPropagation(); navigator.clipboard.writeText(r.suggestion).then(function () { setCopiedRule(i); setTimeout(function () { setCopiedRule(null); }, 1500); }).catch(function () {}); },
+                    style: { background: "none", border: "1px solid var(--border)", borderRadius: "3px", color: "var(--text-muted)", cursor: "pointer", fontSize: "9px", padding: "2px 6px", whiteSpace: "nowrap", flexShrink: 0 },
+                    title: "Copy suggestion"
+                  }, copiedRule === i ? "Copied!" : "Copy")
+                ),
+                React.createElement("div", { style: { display: "flex", gap: "8px", fontSize: "10px", color: "var(--text-muted)", alignItems: "center" } },
                   React.createElement("span", null, "Confidence: " + r.confidence + "%"),
                   r.impact ? React.createElement("span", null, r.impact) : null,
                   r.docsRef ? React.createElement("a", { href: r.docsRef, target: "_blank", style: { marginLeft: "auto", color: "var(--text-accent)", textDecoration: "none", fontSize: "10px" }, onClick: function (e) { e.stopPropagation(); } }, "Docs \u2197") : null
                 ),
-                isExpanded && isPropRule && selectedData.propDiff && selectedData.propDiff.length > 0
-                  ? React.createElement("div", { style: { marginTop: "8px", padding: "6px", background: "var(--bg-app)", borderRadius: "4px", fontSize: "10px" } },
-                      React.createElement("div", { style: { fontWeight: 600, marginBottom: "4px", color: "var(--text-secondary)" } }, "Trigger Data"),
-                      selectedData.propDiff.slice(0, 5).map(function (d, j) {
-                        return React.createElement("div", { key: j, style: { display: "flex", justifyContent: "space-between", padding: "2px 0", borderBottom: "1px solid var(--border)" } },
-                          React.createElement("span", { style: { color: "var(--text-accent)", fontFamily: "'JetBrains Mono', monospace" } }, d.key),
-                          React.createElement("span", { style: { color: "var(--text-muted)" } }, d.type + (d.isFunctionRefChange ? " (fn ref)" : ""))
-                        );
-                      })
-                    )
-                  : null,
-                isExpanded && isChainRule && selectedData.causeChain && selectedData.causeChain.length > 0
-                  ? React.createElement("div", { style: { marginTop: "8px", padding: "6px", background: "var(--bg-app)", borderRadius: "4px", fontSize: "10px" } },
-                      React.createElement("div", { style: { fontWeight: 600, marginBottom: "4px", color: "var(--text-secondary)" } }, "Cause Chain"),
-                      selectedData.causeChain.map(function (link, j) {
-                        return React.createElement("div", { key: j, style: { display: "flex", justifyContent: "space-between", padding: "2px 0" } },
-                          React.createElement("span", null, link.name),
-                          React.createElement("span", { style: link.causeType !== "parent" ? { color: "var(--text-warning)" } : { color: "var(--text-muted)" } }, link.causeType)
-                        );
-                      })
+                isExpanded
+                  ? React.createElement("div", { style: { marginTop: "8px", padding: "8px", background: "var(--bg-app)", borderRadius: "4px", fontSize: "10px", lineHeight: 1.5, color: "var(--text-primary)" } },
+                      React.createElement("div", { style: { marginBottom: "6px", fontSize: "11px" } }, generateExplanation(r, selectedData, selectedData)),
+                      isPropRule && selectedData.propDiff && selectedData.propDiff.length > 0
+                        ? React.createElement("div", null,
+                            React.createElement("div", { style: { marginTop: "6px", fontWeight: 600, fontSize: "9px", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.5px" } }, "Trigger data"),
+                            selectedData.propDiff.slice(0, 5).map(function (d, j) {
+                              return React.createElement("div", { key: j, style: { display: "flex", justifyContent: "space-between", padding: "2px 0", borderBottom: "1px solid var(--border)", fontSize: "10px" } },
+                                React.createElement("span", { style: { color: "var(--text-accent)", fontFamily: "'JetBrains Mono', monospace" } }, d.key),
+                                React.createElement("span", { style: { color: "var(--text-muted)" } }, d.type + (d.isFunctionRefChange ? " (fn ref)" : ""))
+                              );
+                            })
+                          )
+                        : null,
+                      isChainRule && selectedData.causeChain && selectedData.causeChain.length > 0
+                        ? React.createElement("div", null,
+                            React.createElement("div", { style: { marginTop: "6px", fontWeight: 600, fontSize: "9px", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.5px" } }, "Cause chain"),
+                            selectedData.causeChain.map(function (link, j) {
+                              return React.createElement("div", { key: j, style: { display: "flex", justifyContent: "space-between", padding: "2px 0", fontSize: "10px" } },
+                                React.createElement("span", null, link.name),
+                                React.createElement("span", { style: link.causeType !== "parent" ? { color: "var(--text-warning)" } : { color: "var(--text-muted)" } }, link.causeType)
+                              );
+                            })
+                          )
+                        : null
                     )
                   : null
               );
@@ -960,6 +989,7 @@ export default function App() {
       React.createElement("div", { style: s.topBarLeft },
         React.createElement(Flame, { size: 14 }),
         React.createElement("span", { style: s.topBarTitle }, "Render Tracker"),
+        reactVersion ? React.createElement("span", { style: { fontSize: "9px", color: "var(--text-muted)", fontFamily: "'JetBrains Mono', monospace", padding: "1px 5px", border: "1px solid var(--border)", borderRadius: "3px", letterSpacing: "-0.2px" } }, "React " + reactVersion) : null,
         React.createElement("span", { style: { width: "6px", height: "6px", borderRadius: "50%", background: isConnected ? "#4ade80" : "#f87171", flexShrink: 0 } })
       ),
       React.createElement("div", { style: s.topBarCenter },

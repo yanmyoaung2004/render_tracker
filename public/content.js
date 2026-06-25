@@ -25,4 +25,21 @@
       });
     } catch (e) {}
   });
+
+  // Forward highlight commands from background to page
+  try {
+    chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
+      if (!message || message.type !== "HIGHLIGHT") return false;
+      try {
+        window.postMessage({
+          source: "react-render-tracker-bg",
+          type: "HIGHLIGHT",
+          componentName: message.componentName,
+          severity: message.severity || "high",
+        }, window.location.origin || "*");
+      } catch (e) {}
+      sendResponse({});
+      return true;
+    });
+  } catch (e) {}
 })();

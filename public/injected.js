@@ -621,12 +621,33 @@
     return arr;
   }
 
+  var detectedVersion = null;
+
+  function detectReactVersion() {
+    if (detectedVersion) return detectedVersion;
+    try {
+      var hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+      if (hook && hook.renderers && hook.renderers.size > 0) {
+        var first = hook.renderers.values().next().value;
+        detectedVersion = first && first.version ? first.version : "unknown";
+        return detectedVersion;
+      }
+      if (typeof React !== "undefined" && React.version) {
+        detectedVersion = React.version;
+        return detectedVersion;
+      }
+    } catch (e) {}
+    detectedVersion = "unknown";
+    return detectedVersion;
+  }
+
   function buildPayload(tree) {
     return {
       currentCommitUpdates: currentCommitUpdates,
       timeline: renderTimeline.slice(-TIMELINE_SEND_COUNT),
       componentTree: tree,
       globalStats: buildGlobalStatsArray(),
+      reactVersion: detectReactVersion(),
     };
   }
 
@@ -675,6 +696,75 @@
     return serializePayload(payload);
   }
 
+  // ── Visual highlights ──────────────────────────────────────────
+  var HIGHLIGHT_DURATION = 2000;
+  var highlightStyleInjected = false;
+
+  function injectHighlightStyles() {
+    if (highlightStyleInjected) return;
+    highlightStyleInjected = true;
+    var style = document.createElement("style");
+    style.textContent = "@keyframes rt-flash { 0% { outline-width: 3px; opacity: 1; } 70% { outline-width: 3px; opacity: 1; } 100% { outline-width: 0; opacity: 0; } }";
+    style.id = "rt-highlight";
+    document.head.appendChild(style);
+  }
+
+  function findFiberDOMNode(fiber) {
+    var current = fiber;
+    while (current) {
+      if (current.stateNode && current.stateNode instanceof HTMLElement) {
+        return current.stateNode;
+      }
+      current = current.child;
+    }
+    return null;
+  }
+
+  function findFibersByName(name, root) {
+    var results = [];
+    var stack = [root];
+    while (stack.length > 0) {
+      var fiber = stack.pop();
+      if (!fiber) continue;
+      var fiberName = getComponentName(fiber);
+      if (fiberName === name) results.push(fiber);
+      var child = fiber.child;
+      while (child) { stack.push(child); child = child.sibling; }
+    }
+    return results;
+  }
+
+  var lastRootFiber = null;
+
+  function handleHighlightMessage(name, severity) {
+    if (!lastRootFiber) return;
+    var fibers = findFibersByName(name, lastRootFiber);
+    if (fibers.length === 0) return;
+    injectHighlightStyles();
+    var color = severity === "critical" ? "#f87171" : severity === "high" ? "#fbbf24" : "#4ade80";
+    for (var i = 0; i < fibers.length; i++) {
+      var el = findFiberDOMNode(fibers[i]);
+      if (!el) continue;
+      el.style.outline = "3px solid " + color;
+      el.style.outlineOffset = "-3px";
+      el.style.transition = "outline 0.3s, opacity 0.5s";
+      setTimeout(function (elem) {
+        elem.style.outline = "";
+        elem.style.outlineOffset = "";
+      }, HIGHLIGHT_DURATION, el);
+    }
+  }
+
+  // ── Listen for highlight commands ──────────────────────────────
+  window.addEventListener("message", function (event) {
+    if (event.source !== window) return;
+    var data = event.data;
+    if (!data || data.source !== "react-render-tracker-bg") return;
+    if (data.type === "HIGHLIGHT") {
+      handleHighlightMessage(data.componentName, data.severity || "high");
+    }
+  });
+
   // ── Hook patching ────────────────────────────────────────────────
   function patchReactHook(hook) {
     if (hook.__RENDER_TRACKER_PATCHED__) return;
@@ -700,6 +790,7 @@
 
       try {
         if (!root || !root.current) return result;
+        lastRootFiber = root.current;
 
         var cloned = processCommit(root.current);
         if (!cloned) return result;

@@ -74,15 +74,25 @@ function forwardToPort(tabId, payload, commitId) {
 
 chrome.runtime.onConnect.addListener(function (port) {
   if (port.name !== "devtools-panel") return;
+  var tabId = null;
   port.onMessage.addListener(function (message) {
     if (!message || typeof message !== "object") return;
-    if (message.type !== "INIT") return;
-    if (typeof message.tabId !== "number") return;
-    connections[message.tabId] = port;
-    if (latestData) {
+    if (message.type === "INIT") {
+      if (typeof message.tabId !== "number") return;
+      tabId = message.tabId;
+      connections[tabId] = port;
+      if (latestData) {
+        try {
+          port.postMessage({ type: "FOR_DEVTOOLS", payload: latestData.payload, commitId: latestData.commitId });
+        } catch (e) {}
+      }
+      return;
+    }
+    if (message.type === "HIGHLIGHT" && tabId && message.componentName) {
       try {
-        port.postMessage({ type: "FOR_DEVTOOLS", payload: latestData.payload, commitId: latestData.commitId });
+        chrome.tabs.sendMessage(tabId, { type: "HIGHLIGHT", componentName: message.componentName, severity: message.severity || "high" }).catch(function () {});
       } catch (e) {}
+      return;
     }
   });
   port.onDisconnect.addListener(function () {
