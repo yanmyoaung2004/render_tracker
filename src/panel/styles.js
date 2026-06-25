@@ -269,7 +269,7 @@ export function createStyles(mode) {
     insightSuggestion: {
       fontSize: typography.size.sm,
       color: t.text.success,
-      background: mode === "dark" ? "#1a3a2a" : "#d8f0e0",
+      background: mode === "dark" ? "#0f3a3a" : "#ccfbf1",
       padding: "3px 6px",
       borderRadius: "3px",
       marginTop: "4px",

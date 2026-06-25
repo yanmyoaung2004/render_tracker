@@ -77,11 +77,12 @@ function TreeNode(props) {
   var depth = props.depth;
   var selectedName = props.selectedName;
   var onSelect = props.onSelect;
-  var expanded = props.expanded;
-  var setExpanded = props.setExpanded;
-  var expandedMap = props.expandedMap;
   var s = props.styles;
   var mode = props.colorMode;
+
+  var _local = useState(depth < 2);
+  var expanded = _local[0];
+  var setExpanded = _local[1];
 
   var hasChildren = node.children && node.children.length > 0;
   var isSelected = selectedName === node.name;
@@ -140,9 +141,6 @@ function TreeNode(props) {
               depth: depth + 1,
               selectedName: selectedName,
               onSelect: onSelect,
-              expanded: expandedMap && expandedMap[child.key || child.name],
-              setExpanded: setExpanded,
-              expandedMap: expandedMap,
               styles: s,
               colorMode: mode,
             });
@@ -198,9 +196,8 @@ export default function App() {
   var _useState15 = useState(false);
   var showResetMenu = _useState15[0];
   var setShowResetMenu = _useState15[1];
-  var _useState16 = useState({});
-  var treeExpanded = _useState16[0];
-  var setTreeExpanded = _useState16[1];
+  var _useState16 = useState(null);
+  var _treeUnused = _useState16[0];
   var _useState17 = useState(false);
   var liveFeedExpanded = _useState17[0];
   var setLiveFeedExpanded = _useState17[1];
@@ -630,12 +627,6 @@ export default function App() {
         depth: 0,
         selectedName: selectedComponent,
         onSelect: setSelectedComponent,
-        expanded: treeExpanded[componentTree.key || componentTree.name],
-        setExpanded: function (val) {
-          var key = componentTree.key || componentTree.name;
-          setTreeExpanded(function (prev) { return { ...prev, [key]: val }; });
-        },
-        expandedMap: treeExpanded,
         styles: s,
         colorMode: colorMode,
       })
