@@ -880,7 +880,23 @@ export default function App() {
                 React.createElement("div", { style: { fontWeight: 600, fontSize: "11px", marginBottom: "2px", display: "flex", alignItems: "center", gap: "4px", justifyContent: "space-between" } },
                   React.createElement("span", null, r.name),
                   React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "4px" } },
-                    r.source ? React.createElement("span", { style: { fontSize: "9px", color: "var(--text-accent)", fontFamily: "'JetBrains Mono', monospace", background: "var(--bg-app)", padding: "1px 4px", borderRadius: "2px" } }, r.source) : null,
+                    r.source ? React.createElement("span", {
+                      style: { fontSize: "9px", color: "var(--text-accent)", fontFamily: "'JetBrains Mono', monospace", background: "var(--bg-app)", padding: "1px 4px", borderRadius: "2px", cursor: "pointer", textDecoration: "underline", textDecorationColor: "var(--border)", textUnderlineOffset: "2px" },
+                      onClick: function (e) {
+                        e.stopPropagation();
+                        var full = r.sourceRaw || "";
+                        var clean = full.replace(/^webpack:\/\/\/\.?\//, "").replace(/^file:\/\//, "");
+                        if (clean && r.sourceLine) {
+                          var url = "vscode://file/" + clean + ":" + r.sourceLine;
+                          try { window.open(url, "_blank"); } catch (ex) {}
+                        }
+                        navigator.clipboard.writeText(r.source).then(function () {
+                          setCopiedRule("src-" + i);
+                          setTimeout(function () { setCopiedRule(null); }, 1500);
+                        }).catch(function () {});
+                      },
+                      title: "Click to copy path"
+                    }, copiedRule === "src-" + i ? "Copied!" : r.source) : null,
                     React.createElement("span", { style: { fontSize: "9px", color: "var(--text-muted)", fontWeight: 400 } }, r.categoryName)
                   )
                 ),

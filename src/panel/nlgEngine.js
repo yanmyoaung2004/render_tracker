@@ -3,6 +3,15 @@
 
 function fmt(name) { return name || "this component"; }
 
+function src(data) {
+  if (data && data.sourceInfo && data.sourceInfo.file) {
+    var f = data.sourceInfo.file;
+    var parts = f.split("/").slice(-2).join("/");
+    return " at " + parts + ":" + data.sourceInfo.line;
+  }
+  return "";
+}
+
 function chainParents(chain) {
   if (!chain) return [];
   return chain.filter(function (l) { return l.causeType === "parent"; });
@@ -15,7 +24,8 @@ var generators = {
     var name = fmt(data.name);
     var chainLen = data.causeChain ? data.causeChain.length : 0;
     var rootName = data.causeChain && data.causeChain[0] ? data.causeChain[0].name : name;
-    return name + " re-rendered, but none of its props or state changed. The render was caused by " + rootName + " re-rendering higher up the tree. This " + chainLen + "-component chain did zero visible work. Fix: Wrap " + rootName + " in React.memo() — this stops the cascade at the source.";
+    var location = src(data);
+    return name + " re-rendered" + location + ", but none of its props or state changed. The render was caused by " + rootName + " re-rendering higher up the tree. This " + chainLen + "-component chain did zero visible work. Fix: Wrap " + rootName + " in React.memo() — this stops the cascade at the source.";
   },
 
   // R2: Partial wasted chain
@@ -37,8 +47,9 @@ var generators = {
       }
     }
     var fnList = fns.join(", ");
+    var location = src(data);
     if (fnList.length === 0) return name + " has unstable function props. Wrap each in useCallback().";
-    return name + " re-rendered because " + fnList + " changed. These props are functions created inline during the parent's render. Every render produces a new function reference, so any child wrapped in React.memo() sees a 'different' prop and re-renders. Fix: Wrap " + fnList + " in useCallback() inside the parent component.";
+    return name + " re-rendered because " + fnList + " changed" + location + ". These props are functions created inline during the parent's render. Every render produces a new function reference, so any child wrapped in React.memo() sees a 'different' prop and re-renders. Fix: Wrap " + fnList + " in useCallback() inside the parent component.";
   },
 
   // R4: Unstable object props

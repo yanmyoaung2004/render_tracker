@@ -491,6 +491,7 @@ export function evaluateRules(updateData, statsData) {
   var data = updateData || {};
   var srcInfo = data.sourceInfo;
   var srcLine = srcInfo && srcInfo.file ? srcInfo.file.split("/").slice(-2).join("/") + ":" + srcInfo.line : null;
+  var srcFull = srcInfo && srcInfo.file ? srcInfo.file : null;
   for (var r = 0; r < RULES.length; r++) {
     var rule = RULES[r];
     try {
@@ -507,6 +508,8 @@ export function evaluateRules(updateData, statsData) {
           confidence: rule.confidence,
           docsRef: rule.docsRef,
           source: srcLine,
+          sourceRaw: srcFull,
+          sourceLine: srcInfo ? srcInfo.line : null,
         });
       }
     } catch (e) {
