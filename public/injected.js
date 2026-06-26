@@ -633,16 +633,25 @@
       var hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
       if (hook && hook.renderers && hook.renderers.size > 0) {
         var first = hook.renderers.values().next().value;
-        detectedVersion = first && first.version ? first.version : "unknown";
-        return detectedVersion;
+        var v = first && (first.version || first.rendererVersion || (first._reactInternals && first._reactInternals.version));
+        if (v) { detectedVersion = String(v); return detectedVersion; }
       }
       if (typeof React !== "undefined" && React.version) {
         detectedVersion = React.version;
         return detectedVersion;
       }
+      // Fallback: try to read version from a known fiber
+      if (lastRootFiber && lastRootFiber._debugInfo && lastRootFiber._debugInfo.length > 0) {
+        for (var i = 0; i < lastRootFiber._debugInfo.length; i++) {
+          if (lastRootFiber._debugInfo[i].version) {
+            detectedVersion = String(lastRootFiber._debugInfo[i].version);
+            return detectedVersion;
+          }
+        }
+      }
     } catch (e) {}
-    detectedVersion = "unknown";
-    return detectedVersion;
+    detectedVersion = null;
+    return null;
   }
 
   function buildPayload(tree) {

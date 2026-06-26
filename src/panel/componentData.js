@@ -23,6 +23,7 @@ export function createComponentData(update) {
     predictions: update.predictions || [],
     confidence: update.confidence || null,
     score: update.score || 0,
+    sourceInfo: update.sourceInfo || null,
   };
 }
 
@@ -52,6 +53,7 @@ export function mergeComponentData(existing, update) {
     predictions: update.predictions || [],
     confidence: update.confidence || null,
     score: update.score || 0,
+    sourceInfo: update.sourceInfo || existing.sourceInfo || null,
   };
 }
 

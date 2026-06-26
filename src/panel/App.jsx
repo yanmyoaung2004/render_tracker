@@ -881,7 +881,7 @@ export default function App() {
                   React.createElement("span", null, r.name),
                   React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "4px" } },
                     r.source ? React.createElement("span", {
-                      style: { fontSize: "9px", color: "var(--text-accent)", fontFamily: "'JetBrains Mono', monospace", background: "var(--bg-app)", padding: "1px 4px", borderRadius: "2px", cursor: "pointer", textDecoration: "underline", textDecorationColor: "var(--border)", textUnderlineOffset: "2px" },
+                      style: { fontSize: "9px", color: "var(--text-accent)", fontFamily: "'JetBrains Mono', monospace", background: "var(--bg-app)", padding: "1px 5px", borderRadius: "2px", cursor: "pointer", border: "1px solid var(--border)", display: "inline-flex", alignItems: "center", gap: "3px" },
                       onClick: function (e) {
                         e.stopPropagation();
                         var full = r.sourceRaw || "";
@@ -895,8 +895,8 @@ export default function App() {
                           setTimeout(function () { setCopiedRule(null); }, 1500);
                         }).catch(function () {});
                       },
-                      title: "Click to copy path"
-                    }, copiedRule === "src-" + i ? "Copied!" : r.source) : null,
+                      title: "Click to open in VSCode (copies path as fallback)"
+                    }, copiedRule === "src-" + i ? "Copied!" : "\u2197 " + r.source) : null,
                     React.createElement("span", { style: { fontSize: "9px", color: "var(--text-muted)", fontWeight: 400 } }, r.categoryName)
                   )
                 ),
