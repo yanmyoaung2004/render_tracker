@@ -48,12 +48,21 @@
   }
 
   function getFiberSource(fiber) {
+    // React 19: _debugInfo on current fiber
     if (fiber._debugInfo && fiber._debugInfo.length > 0) {
       for (var si = 0; si < fiber._debugInfo.length; si++) {
         var item = fiber._debugInfo[si];
         if (item && item.source && item.source.fileName) return item.source;
       }
     }
+    // React 19: _debugInfo on alternate fiber
+    if (fiber.alternate && fiber.alternate._debugInfo && fiber.alternate._debugInfo.length > 0) {
+      for (var si2 = 0; si2 < fiber.alternate._debugInfo.length; si2++) {
+        var item2 = fiber.alternate._debugInfo[si2];
+        if (item2 && item2.source && item2.source.fileName) return item2.source;
+      }
+    }
+    // React 18: _debugSource on fiber
     return fiber._debugSource || null;
   }
 
@@ -479,7 +488,7 @@
     var score = calculateRenderScore(record.count, exclusive, patterns);
 
     var src = getFiberSource(fiber);
-    var sourceInfo = src && src.fileName ? { file: src.fileName, line: src.lineNumber } : null;
+    var sourceInfo = src && typeof src.fileName === "string" ? { file: src.fileName, line: src.lineNumber || 0 } : null;
 
     var prevKey = fiber.alternate ? fiber.alternate.key : null;
     var currentKey = fiber.key;
@@ -888,10 +897,15 @@
       renderers: new Map(),
       supportsFiber: true,
       supportsMutation: true,
+      supportsFlight: true,
+      isReactDevToolsPresent: true,
+      hasUnsupportedRendererAttached: false,
       inject: function () {},
       onCommitFiberRoot: function () {},
       onCommitFiberUnmount: function () {},
+      onPostCommitFiberRoot: function () {},
       getFiberRoots: function () { return new Set(); },
+      onScheduleFiberRoot: function () {},
     };
     try {
       Object.defineProperty(window, "__REACT_DEVTOOLS_GLOBAL_HOOK__", { value: hook, configurable: false });
