@@ -47,12 +47,22 @@
     return false;
   }
 
+  function getFiberSource(fiber) {
+    if (fiber._debugInfo && fiber._debugInfo.length > 0) {
+      for (var si = 0; si < fiber._debugInfo.length; si++) {
+        var item = fiber._debugInfo[si];
+        if (item && item.source && item.source.fileName) return item.source;
+      }
+    }
+    return fiber._debugSource || null;
+  }
+
   function isUserComponent(fiber) {
     if (!fiber || !fiber.type) return false;
     if (typeof fiber.type === "string") return false;
     if (INTERNAL_TAGS.indexOf(fiber.tag) !== -1) return false;
 
-    var source = fiber._debugSource;
+    var source = getFiberSource(fiber);
     if (source && source.fileName) {
       return !isLibraryFile(source.fileName);
     }
@@ -468,11 +478,8 @@
 
     var score = calculateRenderScore(record.count, exclusive, patterns);
 
-    var fiberSource = fiber._debugSource || null;
-    var sourceInfo = null;
-    if (fiberSource && typeof fiberSource.fileName === "string" && fiberSource.fileName.length > 0 && fiberSource.lineNumber != null) {
-      sourceInfo = { file: fiberSource.fileName, line: fiberSource.lineNumber };
-    }
+    var src = getFiberSource(fiber);
+    var sourceInfo = src && src.fileName ? { file: src.fileName, line: src.lineNumber } : null;
 
     var prevKey = fiber.alternate ? fiber.alternate.key : null;
     var currentKey = fiber.key;
@@ -643,13 +650,32 @@
         detectedVersion = React.version;
         return detectedVersion;
       }
-      // Fallback: try to read version from a known fiber
-      if (lastRootFiber && lastRootFiber._debugInfo && lastRootFiber._debugInfo.length > 0) {
-        for (var i = 0; i < lastRootFiber._debugInfo.length; i++) {
-          if (lastRootFiber._debugInfo[i].version) {
-            detectedVersion = String(lastRootFiber._debugInfo[i].version);
+      // Fallback: try to read version from a fiber's _debugInfo (React 19)
+      if (lastRootFiber && lastRootFiber._debugInfo) {
+        var arr = Array.isArray(lastRootFiber._debugInfo) ? lastRootFiber._debugInfo : [lastRootFiber._debugInfo];
+        for (var fi = 0; fi < arr.length; fi++) {
+          if (arr[fi] && arr[fi].version) {
+            detectedVersion = String(arr[fi].version);
             return detectedVersion;
           }
+        }
+      }
+      // Last resort: walk the tree for any _debugInfo with version
+      if (lastRootFiber) {
+        var walk = [lastRootFiber];
+        while (walk.length > 0) {
+          var f = walk.pop();
+          if (f._debugInfo) {
+            var arr2 = Array.isArray(f._debugInfo) ? f._debugInfo : [f._debugInfo];
+            for (var fj = 0; fj < arr2.length; fj++) {
+              if (arr2[fj] && arr2[fj].version) {
+                detectedVersion = String(arr2[fj].version);
+                return detectedVersion;
+              }
+            }
+          }
+          var ch = f.child;
+          while (ch) { walk.push(ch); ch = ch.sibling; }
         }
       }
     } catch (e) {}
