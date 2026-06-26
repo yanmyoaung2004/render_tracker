@@ -469,7 +469,10 @@
     var score = calculateRenderScore(record.count, exclusive, patterns);
 
     var fiberSource = fiber._debugSource || null;
-    var sourceInfo = fiberSource ? { file: fiberSource.fileName, line: fiberSource.lineNumber } : null;
+    var sourceInfo = null;
+    if (fiberSource && typeof fiberSource.fileName === "string" && fiberSource.fileName.length > 0 && fiberSource.lineNumber != null) {
+      sourceInfo = { file: fiberSource.fileName, line: fiberSource.lineNumber };
+    }
 
     var prevKey = fiber.alternate ? fiber.alternate.key : null;
     var currentKey = fiber.key;
