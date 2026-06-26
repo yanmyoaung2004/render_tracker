@@ -468,6 +468,9 @@
 
     var score = calculateRenderScore(record.count, exclusive, patterns);
 
+    var fiberSource = fiber._debugSource || null;
+    var sourceInfo = fiberSource ? { file: fiberSource.fileName, line: fiberSource.lineNumber } : null;
+
     var prevKey = fiber.alternate ? fiber.alternate.key : null;
     var currentKey = fiber.key;
     var startTime = performance.now();
@@ -498,6 +501,7 @@
       changeRatio: totalPropCount > 0 ? changedPropCount / totalPropCount : 0,
       allPropsChanged: totalPropCount > 0 && changedPropCount === totalPropCount,
       renderDurationMs: Math.round(renderDuration * 100) / 100,
+      sourceInfo: sourceInfo,
     };
   }
 
@@ -692,6 +696,8 @@
     currentCommitUpdates = updates;
     addToTimeline(updates, tree);
 
+    autoScanHighlights(updates);
+
     var payload = buildPayload(tree);
     return serializePayload(payload);
   }
@@ -741,7 +747,7 @@
     var fibers = findFibersByName(name, lastRootFiber);
     if (fibers.length === 0) return;
     injectHighlightStyles();
-    var color = severity === "critical" ? "#f87171" : severity === "high" ? "#fbbf24" : "#4ade80";
+    var color = severity === "critical" ? "#f04452" : severity === "high" ? "#f59e0b" : "#0d9488";
     for (var i = 0; i < fibers.length; i++) {
       var el = findFiberDOMNode(fibers[i]);
       if (!el) continue;
@@ -752,6 +758,30 @@
         elem.style.outline = "";
         elem.style.outlineOffset = "";
       }, HIGHLIGHT_DURATION, el);
+    }
+  }
+
+  function autoScanHighlights(updates) {
+    if (!lastRootFiber) return;
+    injectHighlightStyles();
+    for (var i = 0; i < updates.length; i++) {
+      var u = updates[i];
+      if (!u || !u.name) continue;
+      var sev = u.score > 500 ? "critical" : u.score > 200 ? "high" : null;
+      if (!sev) continue;
+      var fibers = findFibersByName(u.name, lastRootFiber);
+      var color = sev === "critical" ? "#f04452" : "#f59e0b";
+      for (var j = 0; j < fibers.length; j++) {
+        var el = findFiberDOMNode(fibers[j]);
+        if (!el) continue;
+        el.style.outline = "3px solid " + color;
+        el.style.outlineOffset = "-3px";
+        el.style.transition = "outline 0.3s, opacity 0.5s";
+        setTimeout(function (elem) {
+          elem.style.outline = "";
+          elem.style.outlineOffset = "";
+        }, HIGHLIGHT_DURATION, el);
+      }
     }
   }
 

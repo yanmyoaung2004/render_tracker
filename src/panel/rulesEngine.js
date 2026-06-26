@@ -488,6 +488,9 @@ var RULES = [
 // Returns array of matched rules with computed display fields
 export function evaluateRules(updateData, statsData) {
   var matched = [];
+  var data = updateData || {};
+  var srcInfo = data.sourceInfo;
+  var srcLine = srcInfo && srcInfo.file ? srcInfo.file.split("/").slice(-2).join("/") + ":" + srcInfo.line : null;
   for (var r = 0; r < RULES.length; r++) {
     var rule = RULES[r];
     try {
@@ -503,6 +506,7 @@ export function evaluateRules(updateData, statsData) {
           impact: rule.impact(updateData, statsData),
           confidence: rule.confidence,
           docsRef: rule.docsRef,
+          source: srcLine,
         });
       }
     } catch (e) {

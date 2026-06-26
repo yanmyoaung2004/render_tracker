@@ -572,9 +572,9 @@ export default function App() {
   function renderTableView() {
     if (sortedComponents.length === 0) {
       return renderEmptyState(
-        React.createElement(Clock, { size: 48 }),
+        React.createElement(Activity, { size: 48 }),
         "No render data yet",
-        "Interact with your React app — click buttons, navigate, update state"
+        "Interact with your React app — buttons, navigation, state updates. Components that re-render unnecessarily will auto-highlight on the page with colored outlines."
       );
     }
 
@@ -879,7 +879,10 @@ export default function App() {
               return React.createElement("div", { key: i, style: { cursor: "pointer", ...s.insightCard(r.severity) }, onClick: function () { setExpandedRule(isExpanded ? null : i); } },
                 React.createElement("div", { style: { fontWeight: 600, fontSize: "11px", marginBottom: "2px", display: "flex", alignItems: "center", gap: "4px", justifyContent: "space-between" } },
                   React.createElement("span", null, r.name),
-                  React.createElement("span", { style: { fontSize: "9px", color: "var(--text-muted)", fontWeight: 400 } }, r.categoryName)
+                  React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "4px" } },
+                    r.source ? React.createElement("span", { style: { fontSize: "9px", color: "var(--text-accent)", fontFamily: "'JetBrains Mono', monospace", background: "var(--bg-app)", padding: "1px 4px", borderRadius: "2px" } }, r.source) : null,
+                    React.createElement("span", { style: { fontSize: "9px", color: "var(--text-muted)", fontWeight: 400 } }, r.categoryName)
+                  )
                 ),
                 React.createElement("div", { style: { fontSize: "11px", marginBottom: "4px" } }, r.message),
                 React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "4px", marginBottom: "4px" } },
@@ -1074,7 +1077,7 @@ export default function App() {
           ? renderEmptyState(
               React.createElement(WifiOff, { size: 36 }),
               "Waiting for connection...",
-              "Open DevTools on any React app (F12). If no data appears, refresh the page with DevTools open."
+              "Open DevTools (F12) on any React app, then click the Render Tracker tab. If no data appears, refresh the page with DevTools open."
             )
           : viewMode === "table" ? renderTableView()
           : viewMode === "tree" ? renderTreeView()
