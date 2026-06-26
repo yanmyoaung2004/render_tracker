@@ -489,9 +489,14 @@ var RULES = [
 export function evaluateRules(updateData, statsData) {
   var matched = [];
   var data = updateData || {};
-  var srcInfo = data.sourceInfo;
-  var srcLine = srcInfo && srcInfo.file ? srcInfo.file.split("/").slice(-2).join("/") + ":" + srcInfo.line : null;
-  var srcFull = srcInfo && srcInfo.file ? srcInfo.file : null;
+  var srcInfo = data && data.sourceInfo;
+  var srcLine = null;
+  var srcFull = null;
+  if (srcInfo && srcInfo.file && typeof srcInfo.file === "string" && srcInfo.line != null) {
+    var parts = srcInfo.file.split(/[/\\]/);
+    srcLine = parts.slice(-2).join("/") + ":" + srcInfo.line;
+    srcFull = srcInfo.file;
+  }
   for (var r = 0; r < RULES.length; r++) {
     var rule = RULES[r];
     try {
