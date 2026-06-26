@@ -284,6 +284,11 @@ export default function App() {
           portRef.current = p;
           setIsConnected(true);
 
+          p.onDisconnect.addListener(function () {
+            portRef.current = null;
+            setIsConnected(false);
+          });
+
           port.onMessage.addListener(function (message) {
             try {
               if (!message || message.type !== "FOR_DEVTOOLS" || !message.payload) return;
@@ -334,8 +339,19 @@ export default function App() {
 
     initFromWindow();
 
+    // Heartbeat to keep background service worker alive
+    var heartbeatTimer = setInterval(function () {
+      if (portRef.current) {
+        try { portRef.current.postMessage({ type: "PING" }); } catch (e) {
+          portRef.current = null;
+          setIsConnected(false);
+        }
+      }
+    }, 15000);
+
     return function () {
       if (insightsTimerRef.current) clearTimeout(insightsTimerRef.current);
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
       if (mq && typeof mq.removeEventListener === "function") {
         mq.removeEventListener("change", onThemeChange);
       }

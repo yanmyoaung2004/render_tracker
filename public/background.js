@@ -94,6 +94,10 @@ chrome.runtime.onConnect.addListener(function (port) {
       } catch (e) {}
       return;
     }
+    if (message.type === "PING") {
+      // Heartbeat — keeps service worker alive
+      return;
+    }
   });
   port.onDisconnect.addListener(function () {
     var tabIds = Object.keys(connections);
